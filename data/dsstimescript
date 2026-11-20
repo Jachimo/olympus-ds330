@@ -1,0 +1,21 @@
+#!/bin/bash
+# Convert .dss filenames to the time format
+# (c) Alexey Fisher 2006. Released under GPLv2.
+
+
+for dss_file in $( ls *.dss ); do
+	
+	s_year=$(dd if=$dss_file bs=1 count=2 skip=38);
+	s_month=$(dd if=$dss_file bs=1 count=2 skip=40);
+	s_day=$(dd if=$dss_file bs=1 count=2 skip=42);
+	s_hour=$(dd if=$dss_file bs=1 count=2 skip=44);
+	s_min=$(dd if=$dss_file bs=1 count=2 skip=46);
+	s_sec=$(dd if=$dss_file bs=1 count=2 skip=48);
+
+	lenth_h=$(dd if=$dss_file bs=1 count=2 skip=62);
+	lenth_m=$(dd if=$dss_file bs=1 count=2 skip=64);
+	lenth_s=$(dd if=$dss_file bs=1 count=2 skip=66);
+
+	mv $dss_file 20$s_year.$s_month.$s_day-$s_hour.$s_min-$lenth_h.$lenth_m.$lenth_s.dss;
+done
+	

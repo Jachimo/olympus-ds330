@@ -1,0 +1,47 @@
+# Large binaries / disk images / installers
+Olympus_DSS_Player_Software.ISO
+*.iso
+*.ISO
+*.img
+*.dmg
+*.cab
+*.exe
+*.msi
+*.tar.bz2
+*.tgz
+*.zip
+
+# Extracted CD contents (re-extractable from the ISO)
+data/iso_root/
+
+# Wine prefix (system registry, huge, machine-specific)
+wineprefix/
+
+# Python venv (path-baked, re-creatable)
+venv/
+
+# Local libusb build tree (re-creatable from tarball)
+thirdparty/libusb-local/
+thirdparty/libusb-1.0.28/
+
+# Compiled C binaries and objects (whitelist sources)
+src/*
+!src/*.c
+!src/*.py
+*.o
+*.so
+*.a
+
+# Python
+__pycache__/
+*.pyc
+*.pyo
+
+# Editor / system junk
+*.swp
+*~
+.DS_Store
+
+# Extracted DSS Player installer (re-extractable from ISO)
+thirdparty/wine-setup/
+wine-setup/
