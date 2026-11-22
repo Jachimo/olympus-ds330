@@ -4,6 +4,8 @@
 digital voice recorder (c. 2002) over USB. It allows downloading and clock
 sync.
 
+![Olympus DS-330 digital voice recorder](docs/ds-330_frontview.jpg)
+
 The DS-330's USB protocol is proprietary; this tool was built by
 reverse-engineering the wire traffic of the original Windows-only _DSS Player_
 software. The full protocol is documented in 
