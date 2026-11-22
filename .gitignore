@@ -45,3 +45,10 @@ __pycache__/
 # Extracted DSS Player installer (re-extractable from ISO)
 thirdparty/wine-setup/
 wine-setup/
+
+# Private reverse-engineering artifacts — internal branch only, never
+# published (vendor binaries/disassembly, raw device dumps with
+# personal identifiers, unrelated notes)
+analysis/
+logs/
+archive/
