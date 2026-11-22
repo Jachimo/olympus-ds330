@@ -88,7 +88,7 @@ def open_device():
 
 
 def main():
-    outfile = sys.argv[1] if len(sys.argv) > 1 else "logs/recording.dss"
+    outfile = sys.argv[1] if len(sys.argv) > 1 else "logs/jsmythe001.dss"
     mode = 0
     count = 0x0144
     frame = bytes([0x93, mode, count & 0xff, (count >> 8) & 0xff])

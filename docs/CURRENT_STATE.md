@@ -1,174 +1,83 @@
 # DS-330 Protocol Reverse Engineering — CURRENT STATE
 
-Date: 2026-11-20
-Status: Blocker — file DATA read not yet found
+Date: 2026-11-21
+Status: **COMPLETE** — Linux tool works end-to-end (download + clock set)
 See: DS-330_PROTOCOL.md (protocol reference), DS-330_NOTES.md (project log)
 
 ---
 
-## What we know (confirmed, reproducible)
+## Result
 
-### Device
-- Olympus DS-330 digital voice recorder
-- USB ID: 07b4:0206, USB 1.10, bus-powered, shows "REMOTE" display
-- 5 interfaces: If 0 = vendor-specific file transfer (bulk 0x02 out,
-  bulk 0x81 in, interrupt 0x83 in), If 1-4 = standard USB Audio (UAC1)
-- Device contains ONE recording: file "JSMYTHE001" in folder "DICTATE"
-- Device label: "JSMYTHE"
+`src/ds330tool.py` — self-contained Linux CLI (python3.10 + ctypes libusb,
+no other dependencies). Replicates the Windows DictWnd/DSS Player core
+functions:
 
-### Protocol model (confirmed)
-1. BULK OUT 0x02: send 1-2 byte command `[cmd][arg]`
-2. INTERRUPT IN 0x83: 8-byte status packet
-   - `06 00 00 00 01 00 00 00` = accepted, data stage follows
-   - `ffff000001000000` = rejected
-   - `0000000001000000` = idle/ready
-3. BULK IN 0x81: 64-byte data pages (stream auto-advances cursor)
+```
+ds330tool.py info                     # device/folders/file table/memory
+ds330tool.py download [--out F] [--wav]  # .dss download (byte-identical
+                                      #     to the player's own output)
+ds330tool.py settime [--time ...]     # set recorder clock from PC clock
+ds330tool.py reset                    # recovery without replug
+```
 
-### Confirmed commands
+Verified live against the device (2026-11-21): download produces a DSS file
+byte-identical to `data/downloaded/JSMYTHE001.dss`; ffmpeg converts it to the
+23:03 WAV (DSS-SP codec). `info` prints device model+label, folders, file
+table, size. Clock-set frame (`90` + YYMMDDHHMMSS ASCII) decoded from the
+capture.
 
-| Command | Arg | Returns | Maps to DSX API |
-|---------|-----|---------|-----------------|
-| 0x40 | 0x01 | 17-page file info object (1088 B) | GetFileInfoFirst/Next |
-| 0x40 | 0x02 | Page 1 of file info object | " |
-| 0x47 | 0x00/0x01 | 41 zero bytes | GetFileNum? |
-| 0x47 | 0x02 | "DICTATE" (folder 1) | GetFolderName |
-| 0x47 | 0x03 | "LECTURE " (folder 2) | GetFolderName |
-| 0x47 | 0x04 | "TO DO   " (folder 3) | GetFolderName |
-| 0x47 | 0x05 | "RANDOM  " (folder 4) | GetFolderName |
-| 0x78 | 0x00 | 42-byte config/capability blob | GetRecoderInfo |
-| 0x79 | 0x00 | 16 bytes: dword 0x0097a565 ×2 | GetMemorySize/FreeSpace |
-| 0x95 | 0x00 | "JSMYTHE" (device label) | GetRecoderInfo |
-| 0xb2 | 0x00 | "DS-330    JSMYTHE" (model+label) | GetDeviceInfo |
-| 0xb3 | 0x00 | 16 00 00 ... (small value) | unknown |
-| 0xc0 | 0x00 | 26-byte blob (non-deterministic) | one-shot/calibration |
-| 0xd1 | 0x00 | 00 c0 d0 00 ... (14 bytes) | unknown |
+## Confirmed protocol (final)
 
-### File info object structure (0x40 stream, 17 pages = 1088 bytes)
+All details in `docs/DS-330_PROTOCOL.md` §9. Summary:
 
-Page 0: `4a 54 55 54 30 30 30 31` "JSMYTHE001" — file name
-         `00 02 64 73 73` `.dss` magic (version 2)
-         `01 00 01 00 02 00 00 00` — flags
-         `4a 54 55 54 54 4c 45 20` "JSMYTHE" — label
-         `01 00 00 00` — flags
-         `fe ff ff ff ff` — ?
-         `30 32 30 31 30 31 30 30 30 31 30 35 30 32 30 31` "0201010001050201" — date
-Page 1: `31 30 30 32 34 31 32 30 30 32 33 30 36` "1002412002306" — date cont
-         `ff 07` — ?
-         ff — fill
-Pages 2-7: ff — erased slots
-Page 8: `90 27 15 00` (LE dword 0x00152790 = 1,384,080) — size?
-Pages 9-16: zeros/FF
+- Connect: `f0 00` (init), `b2 00` (confirm)
+- Warmup folder scan (REQUIRED before file ops): `47 01` .. `47 05`
+- File info: `40 01` → 17-page object; `41 01` (no data)
+- **Download: `18 01 01`** (open file #1 — third byte is the file selector,
+  NOT optional) **→ `80 00`** (data phase) → bulk-in pages until timeout
+- Data-phase stream layout: 2-byte preamble, then repeating
+  [512 B dss + 64 B frame] every 576 B; fixup dss[792]=0xFE
+- **Clock set: `90` + 12 ASCII digits YYMMDDHHMMSS**
+- Session notes: device rejects file-open without the init/warmup in the
+  same session; `libusb_reset_device()` recovers wedged state.
 
-### The blocker
+## Negative results (recorded so we don't retest)
 
-The actual `.dss` recording data (~1.38 MB) is NOT in the 17-page info
-object. No 2-byte command produces the recording bytes. Full 2-byte command
-space (0x00-0xff) swept twice: only the commands listed above respond.
-
-### Negative results (tested, no response)
-- 0x7b (flash sector read): 1-byte, 2-byte, and 4-byte args all rejected
-  on this firmware state. Earlier C-probe "55AA" read must have been from
-  a different device state or command misinterpretation.
-- 0x41-0x46 with arg 0x01: rejected (except 0x47 and 0x78-0xd1).
-- 0x48, 0x49, 0x4a, 0x4b-0x4f, 0x50, 0x51, 0x52 with 1-byte args: rejected.
-- 0x30, 0x33 with args: rejected.
-- 0x40 with args 0x03-0x0f, 0x11-0x20, 0x40-0xff: rejected (arg 0x01-0x02 only).
-- All EP0 vendor control transfers (0xC0, bRequest 0x00-0x20): return r=0
-  but no data — not the file path either.
-
----
-
-## What we DON'T know (open questions)
-
-1. **How to read the actual .dss recording bytes.** The recording is
-   somewhere in the device's 32 MB flash. No 2-byte command reaches it.
-   Possible: 3+ byte commands, higher-level session state required,
-   different USB interface, or flash sectors need a protocol we haven't
-   discovered.
-
-2. **The DLL IOCTL→wire protocol mapping.** We know the complete DSX API
-   (32 functions exported from DSXUSB.DLL) and the complete IOCTL map
-   (0x98ff2004–0x98ff20a4). We also know the WinDK kernel driver's URB
-   structure layout. But we cannot map IOCTL→wire bytes without running
-   the driver or a more careful static analysis of DSXUSB.SYS.
-
-3. **Date/time encoding.** The file info has two date strings:
-   "02010100010502010" (page 0) and "1002412002306" (page 1). These don't
-   obviously parse as any standard date format. Likely Olympus-specific
-   binary encoding stored as ASCII digits.
-
-4. **0xc0 non-determinism.** Returns different content on separate
-   sessions. Maybe a rolling counter or one-shot-per-enumeration.
-
----
+- 2-byte command space swept twice; only 0x40/0x41/0x47/0x78/0x79/0x95/
+  0xb2/0xb3/0xc0/0xd1/0xf0 respond (see protocol doc §3-4 for details).
+- `18 01` (two bytes, no file selector) is REJECTED — the selector byte is
+  required (`18 01 01`).
+- `0x93 <mode> <count>` frames: DSXUSB.SYS-era hypothesis; superseded by
+  the captured `18 01 01`/`80 00` sequence. Do not pursue.
+- Old `extract_dss.py` full-session offsets (393-byte preamble) do NOT
+  apply to the `80 00` data-phase stream (which has a 2-byte preamble).
 
 ## Toolchain state
 
-- Working reference reader: `dumpall.py` (Python ctypes + libusb-1.0.so.0)
-- Working command scanner: `cmdscan.py` / `cmdscan.txt`
-- No C compiler needed (headers absent from system); python3.10 ctypes works
-- Linuxbrew python3.14 does NOT work (missing libudev)
+- `src/ds330tool.py` — THE deliverable (ctypes + libusb-1.0.so.0)
+- `src/parse_pcap.py` — usbmon pcap decoder (used for the capture analysis)
+- `src/probe93*.py`, `src/extract_dss.py` — historical probes; kept for
+  reference, superseded by ds330tool
+- system python3.10 works; linuxbrew python3.14 does NOT (no libudev)
 - udev rule installed: `/etc/udev/rules.d/99-ds330.rules` (MODE 0666)
-- Device can be reset via `libusb_reset_device()` without replug
 
-## Alternative approaches (not yet tried)
+## Remaining open questions (nice-to-have, not blockers)
 
-1. **QEMU/KVM Windows VM with USB passthrough** of the DS-330, running
-   real DSS Player 2002 (with valid serial from CD sleeve if obtainable),
-   while capturing with `usbmon` on the host. This is the highest-probability
-   path to discovering the file-data read protocol.
+1. **Date encoding** in file info (`"20101000105020101002412002306"`):
+   Olympus-specific packed-ASCII date; parse not yet done (raw digits
+   displayed by the tool).
+2. **Multiple files**: only one file exists on the device; the download
+   sequence for file #N presumably uses selector byte N in `18 01 NN` —
+   untested (no second recording available).
+3. **`--wav` conversion** shells out to ffmpeg; DSS-SP decode otherwise
+   unsupported natively.
 
-2. **Deep static analysis of DSXUSB.SYS** — the kernel driver builds the
-   actual USB transfers via WinDK's CUsb class. Reversing the exact
-   command byte sequences requires careful disassembly of the URB
-   construction functions (~12k lines of x86 code).
+## Session log
 
-3. **Reverse the Olympus Mac DSS Player** (from the user's ISO) — the
-   Mac version used the same USB device and was downloaded free from
-   Olympus. Binary might be easier to reverse than the Windows driver.
-
-4. **Try the Olympus DS-330 as a USB audio device** — the ISO interface
-   provides real-time audio streaming. Could capture audio this way as a
-   fallback (loses original .dss file format and timestamps).
-
-## Recommended next step
-
-Try the Windows VM/QEMU + usbmon capture approach. This avoids blind
-probing and gives us the exact wire bytes the Olympus software uses.
-
-## Wine Status (Nov 21)
-
-- DSS Player 2002 fully installed in wineprefix (installer ran; serial gate
-  applies to registration only, not runtime).
-- DSSPlay.exe (player) runs under Wine; DictWnd.exe (downloader) also runs and
-  shows the Download Tray UI with no serial prompt.
-- Wine CANNOT access the DS-330: the device path goes through
-  DSXUSB.dll -> DeviceIoControl("\\\\.\\DSXUSB0") -> DSXUSB.SYS kernel driver,
-  which Wine cannot load. No device enumeration in the player's Device Manager.
-- usbmon capture attempted while Wine was running: captured only background
-  bus traffic, no player traffic.
-
-## DictWnd Static Analysis
-
-See docs/DICTWND_ANALYSIS.md. DictWnd resolves all 32 DSXUSB exports at
-runtime and drives the download sequence via thin shims.
-
-## Next Steps
-
-1. Windows VM (QEMU/KVM) with USB passthrough of the DS-330.
-2. Install DRIVERS/DSX (DSXUSB.INF + DSXUSB.SYS + DSXUSB.DLL) standalone --
-   no serial needed.
-3. Copy wineprefix/drive_c/Program Files/DSSPlayer2002 into the VM (bypasses
-   installer serial gate entirely).
-4. Run DictWnd.exe in the VM, download JSMYTHE001, capture with usbmon on host
-   (sudo tcpdump -i usbmon2 -s0 -w logs/usbmon2_dictwnd.pcap).
-5. Compare captured wire bytes against DSXUSB.SYS handler analysis
-   (docs/DS-330_PROTOCOL.md) to resolve the 0x93 mode/count semantics and
-   the 325-byte DownloadDataBase buffer layout.
-
-## 2026-11-21 — GOAL ACHIEVED (data path solved)
-- Raw stream → DSS extraction rule fully decoded and verified byte-for-byte.
-- `src/extract_dss.py` produces a DSS file identical to the player's output;
-  ffmpeg converts it to 23:03 WAV (DSS-SP codec).
-- Remaining: automate raw-stream acquisition on Linux end-to-end (the
-  probe/`93`-command path works but is slow); extraction itself is proven.
+- 2026-11-19/20: protocol discovery, command sweeps, DSXUSB disassembly
+  (see DS-330_NOTES.md)
+- 2026-11-21: Windows VM + usbmon capture of the real player; full
+  sequences decoded; `0x93` path superseded by `18 01 01`/`80 00`.
+- 2026-11-21 (later): `ds330tool.py` written and validated live:
+  download byte-identical to player output; info verified; settime frame
+  decoded from capture (`90 YYMMDDHHMMSS`). Docs updated.

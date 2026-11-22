@@ -5,8 +5,8 @@
 **USB version:** 1.10, bus-powered, full-speed. Display shows "REMOTE" when
 connected and idle.
 **See DS-330_NOTES.md for the wider project log.** This document is the
-protocol reference. Status: reverse-engineering IN PROGRESS; file download
-not yet achieved. Last updated: 2026-11-20.
+protocol reference. Status: **COMPLETE** — download and clock-set both work
+end-to-end from Linux (`src/ds330tool.py`). Last updated: 2026-11-21.
 
 ---
 
@@ -276,26 +276,92 @@ before every download.
 
 DictWnd.exe resolves all 32 DSXUSB exports and drives the download:
 InitUSBPort -> ConectConfirm -> GetFileNum -> GetFileInfoFirst/Next ->
-OpenFile/ReadFile per file. DSXDownloadDataBase (the 325-byte buffer IOCTL)
-is called at >=10 sites, implying per-file or per-chunk transfers. The
-`93 <mode> <count>` wire frame's mode/count semantics must be confirmed by
-capturing a real download in a Windows VM.
+OpenFile/ReadFile per file.
+
+## 9. COMPLETE CONFIRMED SEQUENCES (from usbmon capture of the real player)
+
+Captured 2026-11-21 (`logs/usbmon2_download.pcap`, `logs/usbmon2_vm.pcap`;
+decode script `src/parse_pcap.py`). All commands are sent as full 64-byte
+bulk-OUT pages (zero-padded).
+
+### 9.1 Connect / init handshake
+| Frame | Response (INT 0x83) | Data (0x81) | Meaning |
+|-------|--------------------|-------------|---------|
+| `f0 00` | `06..01` | 1 page | InitUSBPort |
+| `b2 00` | `06..01` | 1 page `"DS-330  <label>"` | ConectConfirm / GetDeviceInfo |
+
+### 9.2 Folder scan (warmup before file operations — REQUIRED)
+`47 01` -> 1 page (status/GetFileNum-ish, `01 00 00 00 ...`)
+`47 02` -> 1 page `00*4 + "DICTATE"` (folder 1)
+`47 03` -> `"LECTURE "` (folder 2)
+`47 04` -> `"TO DO   "` (folder 3)
+`47 05` -> `"RANDOM  "` (folder 4)
+Skipping this warmup makes the device reject the file-open command.
+
+### 9.3 File info
+`40 01` -> 17-page (1088 B) file info object (see §3). Response page 0
+carries the file header (name/dss magic/label/date), page 8 offset +0x09
+carries the LE dword size (0x00152790 = 1,386,384).
+`41 01` -> no data stage (`ff 01 .. 01` status variant); player sends it
+between info and open.
+
+### 9.4 File download (the money sequence)
+| Frame | Notes |
+|-------|-------|
+| `18 01 01` | OpenFile — **third byte is the file selector (01 = file #1)**. Response page `00 96 24 00 ...` |
+| `80 00` | Data phase start. Then bulk-in pages stream until timeout. |
+
+`18 01 01` — NOT `18 01 00`: the third byte is required; sending `18 01`
+(two bytes) is rejected.
+
+### 9.5 Data-phase stream layout (verified byte-for-byte)
+The `80 00` data stream is NOT the same layout as the old probe-era
+full-session stream. It is:
+```
+stream[0:2]      preamble (2 bytes) — discard
+stream[2:514]    dss[0:512]
+then repeating:  64-byte frame (discard) + 512 bytes of dss
+                 (period 576 bytes), i.e. next dss chunk at 578, 1154, 1720...
+stream tail       folder-name table — discard
+```
+Single fixup: dss[792] = 0xFE (flag byte the player sets; stream carries
+0xFF). Extractor: `src/extract_dss.py` (legacy offsets apply to the full
+player session stream with its 393-byte preamble; `DS330.download_raw` +
+`extract_dss` in `src/ds330tool.py` implement the data-phase layout above).
+
+### 9.6 Clock set (SetPCTime)
+```
+90 <12 ASCII digits YYMMDDHHMMSS>
+```
+e.g. captured frame `90 32 36 31 31 32 32 30 32 31 32 31 37` =
+`0x90` + `"261122021217"` = 2026-11-22 02:12:17. Response: accepted status.
+
+### 9.7 Session management notes (live-tested)
+- The device rejects `18 01 01` (file open) unless the §9.1+§9.2
+  init/warmup ran first in the same session.
+- `libusb_reset_device()` + fresh open fully recovers any wedged state.
+- `set_configuration(1)` returns BUSY (-6); ignore.
 
 ## Raw stream → DSS extraction (SOLVED, 2026-11-21)
 
 The bulk-in stream captured during a player download is the DSS file with
-insertions. Layout (verified byte-for-byte against the player's output):
+insertions. The `80 00` **data-phase** layout (what `DS330.download_raw`
+returns, verified byte-for-byte against the player's own JSMYTHE001.dss):
 
-    stream[0:393]        preamble (device file table) — discard
-    stream[393:1417]     dss[0:1024]
-    stream[1417:4162]    device info blob (2745 bytes) — discard
-    stream[4162:4674]    dss[1024:1536]
-    stream[4674:4738]    64-byte frame — discard
-    stream[4738+576k]    64-byte frame (discard) + 512 bytes dss, repeating
-    stream tail          folder-name table (DICTATE/LECTURE/TO DO/RANDOM) — discard
+    stream[0:2]          preamble — discard
+    stream[2:514]        dss[0:512]
+    then repeating:      64-byte frame (discard) + 512 bytes dss
+                         (next dss chunk at 578, 1154, 1720, ... period 576)
 
 Single fixup: dss[792] = 0xFE (player sets it; stream carries 0xFF).
 
-Extractor: `src/extract_dss.py raw_stream.bin out.dss` — output is
-byte-identical to JSMYTHE001.dss and converts cleanly with ffmpeg
-(`ffmpeg -i out.dss out.wav` → 11.025 kHz mono, 23:03 duration, DSS-SP codec).
+Extractor: `src/ds330tool.py` `extract_dss()` — used by `ds330tool download`;
+output verified byte-identical to the player's JSMYTHE001.dss; ffmpeg converts
+it (`ffmpeg -i out.dss out.wav` → 11.025 kHz mono, 23:03 duration, DSS-SP
+codec). `src/extract_dss.py` keeps the legacy FULL-SESSION layout (393-byte
+preamble; applies only to captures that include the pre-`80 00` traffic).
+
+**NOTE:** The `93 <mode> <count>` frames in the 0x93 section are DSXUSB.SYS
+URB-level encodings from static analysis; the actual device wire protocol is
+the `18 01 01` / `80 00` sequence in §9.4, confirmed by capture. The 0x93
+path was superseded.

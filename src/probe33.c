@@ -22,11 +22,11 @@ int main(void) {
         libusb_bulk_transfer(h, 0x02, tx, 4, &sent, 400);
         r = libusb_bulk_transfer(h, 0x81, rx, 64, &rxn, 700);
         if (r == 0 && rxn) {
-            /* print page only if it contains 'JSMY' or non-FF/00 mix */
-            int has_target = memmem(rx, rxn, "JSMY", 4) != NULL;
+            /* print page only if it contains the name marker or non-FF/00 mix */
+            int has_marker = memmem(rx, rxn, "JSMYTHE", 4) != NULL;
             int allsame = 1;
             for (int i = 1; i < rxn; i++) if (rx[i]!=rx[0]) { allsame=0; break; }
-            if (has_target || !allsame) {
+            if (has_marker || !allsame) {
                 printf("page%3d: ", a);
                 for (int i = 0; i < 40; i++) printf("%02x", rx[i]);
                 printf(" | ");
