@@ -1,12 +1,14 @@
 # Olympus DS-330 USB Protocol — Reverse Engineering Notes
 
-**Device:** Olympus DS-330 digital voice recorder (ca. 2002)
-**USB ID:** 07b4:0206 (vendor Olympus, "DIGITAL VOICE RECORDER DS-330")
+**Device:** Olympus DS-330 digital voice recorder (ca. 2002)  
+**USB ID:** 07b4:0206 (vendor Olympus, "DIGITAL VOICE RECORDER DS-330")  
 **USB version:** 1.10, bus-powered, full-speed. Display shows "REMOTE" when
-connected and idle.
+connected and idle.  
 **See DS-330_NOTES.md for the wider project log.** This document is the
-protocol reference. Status: **COMPLETE** — download and clock-set both work
-end-to-end from Linux (`src/ds330tool.py`). Last updated: 2026-11-21.
+protocol reference.  
+Status: **COMPLETE** — download and clock-set both work
+end-to-end from Linux (`src/ds330tool.py`).  
+Last updated: 2026-11-21.  
 
 ---
 
@@ -19,15 +21,17 @@ end-to-end from Linux (`src/ds330tool.py`). Last updated: 2026-11-21.
 | 0 | **Vendor-specific — file transfer / control** | Bulk OUT 0x02 (commands), Bulk IN 0x81 (data), Interrupt IN 0x83 (status) |
 | 1–4 | Standard USB Audio (UAC1) mic + speaker PCM paths | ISO, 8/11.025/16/22.05 kHz 16-bit mono |
 
-Interface 0 is never claimed by any kernel driver, so a native libusb
-extractor needs no unbind dance. The audio interfaces are irrelevant to
-file extraction (analog/USB-audio routes are out of scope by stipulation).
+Interface 0 is not claimed by any kernel driver (as of Nov 2026), so the libusb
+extractor doesn't specifically unbind. 
 
-Endpoint max packet size: 64 bytes (full-speed bulk).
+The audio interfaces are irrelevant to file extraction, and aren't especially
+impressive by modern standards.  But if you wanted to use them... they're there.
 
-## 2. Frame model (confirmed)
+Endpoint max packet size: 64 bytes (full-speed, bulk).
 
-All commands target **interface 0** only. The pattern:
+## 2. Frame model
+
+These commands target **interface 0** only. The pattern:
 
 1. **Command:** BULK OUT 0x02, 1–2 bytes (`[cmd][arg]`).
 2. **Status:** INTERRUPT IN 0x83, 8 bytes:
@@ -101,7 +105,7 @@ Format: `cmd [arg]` → response. Verified with device reset between probes.
   (9,943,141). Likely memory size or free space. Same one-shot caveat as
   0x78.
 
-## 4. Commands that do NOT respond (negative results)
+## 4. Commands that do NOT work
 
 All tested on fresh state (device reset between each), `out=0 in=-7`:
 
@@ -135,7 +139,7 @@ All tested on fresh state (device reset between each), `out=0 in=-7`:
 - `cmdscan.py` sweeps the full 2-byte command space with reset between
   probes; output in `cmdscan.txt`/`cmdscan.log`.
 
-## 7. Open questions — path to file download
+## 7. Open questions
 
 The .dss recording bytes are NOT in the 17-page info object (page 8 dword
 is too small for a real recording; likely metadata size). Hypotheses:
@@ -278,7 +282,7 @@ DictWnd.exe resolves all 32 DSXUSB exports and drives the download:
 InitUSBPort -> ConectConfirm -> GetFileNum -> GetFileInfoFirst/Next ->
 OpenFile/ReadFile per file.
 
-## 9. COMPLETE CONFIRMED SEQUENCES (from usbmon capture of the real player)
+## 9. COMPLETE CONFIRMED SEQUENCES (from usbmon capture)
 
 Captured 2026-11-21 (`logs/usbmon2_download.pcap`, `logs/usbmon2_vm.pcap`;
 decode script `src/parse_pcap.py`). All commands are sent as full 64-byte
