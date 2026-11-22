@@ -1,0 +1,7 @@
+# Olympus DS-330 digital voice recorder (USB 07b4:0206)
+# Grants user-space access (libusb) to the recorder without root.
+# TAG+="uaccess" gives logged-in seat users access on systemd distros;
+# MODE="0666" is the fallback that was tested live (libusb claim works
+# as any user after replugging).
+SUBSYSTEM=="usb", ATTRS{idVendor}=="07b4", ATTRS{idProduct}=="0206", \
+  MODE="0666", TAG+="uaccess"

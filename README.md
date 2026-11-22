@@ -1,46 +1,88 @@
-# Olympus DS-330 USB Extractor
+# ds330tool — Olympus DS-330 on Linux
 
-Goal: pull DSS recordings off a legacy Olympus DS-330 digital voice
-recorder (ca. 2002) on a modern Linux box, then convert DSS → WAV/MP3.
+`ds330tool` talks to the Olympus DS-330 digital voice recorder (ca. 2002)
+over USB and downloads its `.dss` recordings — natively on Linux, with no
+Windows software required. It also sets the recorder's clock.
 
-**Status: SOLVED.** The full wire protocol is reverse-engineered and
-`src/ds330tool.py` downloads `.dss` recordings (byte-identical to the
-Windows player's own output) and sets the recorder clock, natively on
-Linux. See `docs/CURRENT_STATE.md` for the live state and
-`docs/DS-330_PROTOCOL.md` for the protocol reference.
+The DS-330's USB protocol is proprietary; this tool was built by
+reverse-engineering the wire traffic of the original Windows DSS Player
+software. The full protocol is documented in
+[docs/DS-330_PROTOCOL.md](docs/DS-330_PROTOCOL.md).
+
+## Features
+
+- `info` — device identity, folders, file table, recording dates
+- `download` — download recordings as `.dss` (byte-identical to what the
+  Windows player produces), optionally converting to `.wav` via ffmpeg
+- `settime` — set the recorder's clock from the computer clock
+- `reset` — recover a wedged device without unplugging
+
+## Requirements
+
+- Linux with libusb-1.0 (every mainstream distro ships it)
+- Python 3.8+ (only the standard library; `libusb` is loaded via `ctypes`)
+- `ffmpeg` (optional) for `--wav` conversion of the DSS recordings
+
+## Install
+
+1. Install the udev rule so the device is usable without root:
+
+   ```sh
+   sudo cp udev/99-ds330.rules /etc/udev/rules.d/
+   sudo udevadm control --reload && sudo udevadm trigger
+   ```
+
+2. Plug in the recorder (or replug it after installing the rule), then
+   run straight from the checkout:
+
+   ```sh
+   python3 src/ds330tool.py info
+   ```
 
 ## Usage
 
 ```sh
-python3.10 src/ds330tool.py info              # device/folders/file table
-python3.10 src/ds330tool.py download --wav   # download .dss + convert
-python3.10 src/ds330tool.py settime          # set recorder clock from PC
-python3.10 src/ds330tool.py reset            # recover wedged device
+python3 src/ds330tool.py info                  # device, folders, file table
+python3 src/ds330tool.py download              # download first recording
+python3 src/ds330tool.py download -i 2 --wav   # second recording, convert
+python3 src/ds330tool.py settime               # sync recorder clock to PC
+python3 src/ds330tool.py reset                # recover wedged device
 ```
 
-Requires system python3 (3.10) and libusb-1.0; `--wav` needs ffmpeg.
+Downloads are written as `<name>.dss` (override with `--out FILE`);
+`--wav` produces a `.wav` next to it via ffmpeg (DSS-SP codec,
+11.025 kHz mono).
 
-## Layout
+## Tips and troubleshooting
+
+- **`claim_interface: -3` / permission errors** — the udev rule is not
+  active; install it and replug the recorder.
+- **"device rejected ..." errors** — the recorder sometimes rejects valid
+  commands out of a stale session state; run `reset` and retry.
+- Set the clock (`settime`) before making new recordings — the DS-330
+  stamps each file with its clock at record time, and an unset clock
+  defaults to 2002-01-01.
+- Recordings can be converted with ffmpeg directly:
+  `ffmpeg -i file.dss file.mp3`.
+
+## Repository layout
 
 | Path | What |
 |---|---|
-| `src/` | libusb probe/dump tools (C sources + compiled binaries, Python ctypes scripts). Entry points: `dumpall.c`, `cmdscan.py`, `probe_files.c` |
-| `docs/` | Reverse-engineering notes: `DS-330_NOTES.md` (project log/survey), `DS-330_PROTOCOL.md` (wire protocol reference), `CURRENT_STATE.md` (live state — update this after every session) |
-| `docs/screenshots/` | Device photos, dialogs, captures |
-| `data/` | `iso_root/` (extracted Olympus DSS Player 2002 CD), `dsstimescript` (SourceForge odsstools relic) |
-| `thirdparty/` | `libusb-1.0.28` source + local build (`libusb-local/`), `wine-setup` (extracted DSS Player installer; read-only) |
-| `logs/` | Hex dumps and command-scan output (`dump.txt`, `dump40.txt`, `cmdscan.txt`, …) |
-| `archive/` | Unrelated artifacts (LLM title-gen investigation notes, activity CSV) |
-| `wineprefix/`, `venv/` | **Do not move.** Wine prefix (registry paths point here) and Python venv (path baked in) |
-| `Olympus_DSS_Player_Software.ISO` | Original CD image (494 MB) — source of `iso_root/` and `wine-setup/` |
+| `src/ds330tool.py` | The tool |
+| `docs/DS-330_PROTOCOL.md` | Wire-protocol reference |
+| `docs/CURRENT_STATE.md` | Live project state, open questions |
+| `docs/DS-330_NOTES.md` | Background survey and project log |
+| `src/*.c`, `src/*.py` (other) | Probe/dump tools used during reverse-engineering; kept for reference |
+| `data/dsstimescript` | Third-party GPLv2 DSS filename helper (Alexey Fisher, 2006) |
+| `udev/` | udev rule for device access |
 
-## Key facts
+## License
 
-- Device: USB ID `07b4:0206`, 5 interfaces; only **interface 0** matters
-  (bulk OUT 0x02 = commands, bulk IN 0x81 = data, interrupt IN 0x83 = status).
-- No kernel driver claims interface 0, so libusb works directly.
-- udev rule: `/etc/udev/rules.d/99-ds330.rules` (MODE 0666).
-- DSS decode is a solved problem: `ffmpeg -i file.dss file.mp3`.
-- Protocol highlights (see DS-330_PROTOCOL.md §9): init `f0 00`/`b2 00`,
-  folder warmup `47 01..05`, file info `40 01`, download `18 01 01` →
-  `80 00` data phase, clock set `90` + YYMMDDHHMMSS ASCII.
+GPL-3.0 — see [LICENSE](LICENSE).
+
+## Credits
+
+Protocol reverse-engineered from USB captures of the original Olympus
+DSS Player 2002 software, with help from the DSS Player driver
+disassembly. See `docs/` for the full investigation.
