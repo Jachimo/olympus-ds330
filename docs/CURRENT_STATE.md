@@ -21,7 +21,8 @@ ds330tool.py reset                    # recovery without replug
 ```
 
 Verified live against the device (2026-11-21): download produces a DSS file
-byte-identical to `data/downloaded/JSMYTHE001.dss`; ffmpeg converts it to the
+byte-identical to the reference file the Windows player produced
+for the same recording; ffmpeg converts it to the
 23:03 WAV (DSS-SP codec). `info` prints device model+label, folders, file
 table, size. Clock-set frame (`90` + YYMMDDHHMMSS ASCII) decoded from the
 capture.

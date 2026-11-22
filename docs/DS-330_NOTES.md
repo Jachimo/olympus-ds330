@@ -351,7 +351,7 @@ file-list commands (GetFileNum / GetFileInfoFirst/Next) to locate .dss files.
 ### 4-byte command scan results (probe4.c)
 
 FILE METADATA FOUND via 4-byte commands in the 0x40-0x48 range:
-- 0x40 arg1: "JSMYTHE001" + ".dss" + "JSMYTHE   " name field -> file info!
+- 0x40 arg1: "<RECORDING-NAME>" + ".dss" + "JSMYTHE   " name field -> file info!
   (DSXGetFileInfoFirst/Next candidates)
 - 0x41 arg0: ASCII "1002412002306" + ff 07 ff ff... (date/time-ish field?)
 - 0x42-0x45: all-FF pages = empty file slots (0x44 arg1 has 90 27 15 00)
@@ -374,7 +374,7 @@ linear data object, auto-advancing an internal cursor on EVERY call. The
 hand.c test proved this: after ANY single-byte prime (0x00), each 0x40 call
 returned the NEXT page:
 
-  page0: "JSMYTHE001" 00 02 "dss" 01 00 01 00 02 00 00 "JSMYTHE      " 01 00 00
+  page0: "<RECORDING-NAME>" 00 02 "dss" 01 00 01 00 02 00 00 "JSMYTHE      " 01 00 00
   page1: "1002412002306" ff 07 ff ff ...
   page2-7: ff ff (erased slots)
   page8: ff*18 90 27 15 00 ff*39   <- 0x00152790 = 1,384,336 embedded value
@@ -392,7 +392,7 @@ cursor state machine was already exhausted/misaligned. Replugging resets.
 libusb_reset_device + init byte 0x00 re-primes it.
 
 The file info structure (per file, 64-byte pages):
-  p0: name "JSMYTHE001" + 00 02 + "dss" + 01 00 01 00 02 00 00 + label
+  p0: name "<RECORDING-NAME>" + 00 02 + "dss" + 01 00 01 00 02 00 00 + label
       "JSMYTHE" padded + 01 00 00...
   p1: "1002412002306" + ff 07 + ff fill  <- date/time? unknown encoding
   ...
@@ -418,9 +418,9 @@ NEXT:
 - Consistent result across runs: object is 17 pages (0-16), 1088 bytes;
   page 17 read = timeout (-7). Deterministic.
 - Mapping to old C dump (0x00 prime, 32 pages): new dump == old pages 15-31.
-  File header (JSMYTHE001 / dss magic / JSMYTHE / date) at new page 0 = old
+  File header (<RECORDING-NAME> / dss magic / JSMYTHE / date) at new page 0 = old
   page 15. Old pages 0-14 = 15-page FF preamble read by 0x00 prime.
-- Structure: page 0 = file header (name JSMYTHE001, dss magic, label JSMYTHE,
+- Structure: page 0 = file header (name <RECORDING-NAME>, dss magic, label JSMYTHE,
   date "02010100010502010..."), page 1 = date cont "1002412002306" + ff07,
   pages 2-7 = FF fill, page 8 = dword 90 27 15 00 (LE = 0x00152790 =
   1,384,080 bytes - likely file size or region size), pages 9-16 = zeros/FF.
@@ -445,13 +445,13 @@ CONFIRMED PROTOCOL:
 - Status ffff000001000000 on INT = command rejected (data stage never comes).
 
 FILE TABLE OBJECT (17 pages, 1088 bytes, reproducible 3x):
-- page 0: file header. "JSMYTHE001" name, "dss" magic bytes 02 64 73 73 01 00 01
+- page 0: file header. "<RECORDING-NAME>" name, "dss" magic bytes 02 64 73 73 01 00 01
   00 02 00 00 00, label "JSMYTHE", date string "02010100010502010"
 - page 1: date continuation "1002412002306" + ff07
 - pages 2-7: FF fill (erased slots)
 - page 8: dword 90 27 15 00 (LE 0x00152790 = 1,384,080) - size or region
 - pages 9-16: zeros/FF
-- Only ONE file on device ("JSMYTHE001").
+- Only ONE file on device ("<RECORDING-NAME>").
 
 NEGATIVE RESULTS (tested on fresh state each, out=ok in=timeout):
 - 0x7b flash-sector read: no response with 1-byte arg (00,01,02,03,10,20),
@@ -479,5 +479,5 @@ file DATA instead of the info object.
 
 ### 0x47-then-0x40 hypothesis disproven (2026-11-20)
 - 0x47 01 followed by 0x40 01 stream: returns the same 17-page info object
-  (JSMYTHE001 header). 0x47 response is a status/counter, not an open-file
+  (<RECORDING-NAME> header). 0x47 response is a status/counter, not an open-file
   that redirects 0x40 to file data.

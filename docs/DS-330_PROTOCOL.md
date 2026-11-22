@@ -56,8 +56,8 @@ Format: `cmd [arg]` → response. Verified with device reset between probes.
   the command is repeated. `40 02` starts at page 1. Args 11, 12, ff: no
   response. Stream ends with timeout after last page (deterministic, 3x
   verified).
-- Contents of the 17-page object (one file on device, "JSMYTHE001"):
-  - page 0: file header: `"JSMYTHE001"` (name), `02 64 73 73 01 00 01 00 02 00
+- Contents of the 17-page object (one file on device, "<RECORDING-NAME>"):
+  - page 0: file header: `"<RECORDING-NAME>"` (name), `02 64 73 73 01 00 01 00 02 00
     00 00` (dss magic), `"JSMYTHE"` (label), date string `02010100010502010`
   - page 1: date continuation `1002412002306` + `ff07`
   - pages 2–7: FF fill (erased slots)
@@ -346,7 +346,7 @@ e.g. captured frame `90 32 36 31 31 32 32 30 32 31 32 31 37` =
 
 The bulk-in stream captured during a player download is the DSS file with
 insertions. The `80 00` **data-phase** layout (what `DS330.download_raw`
-returns, verified byte-for-byte against the player's own JSMYTHE001.dss):
+returns, verified byte-for-byte against the player's own output for the same recording):
 
     stream[0:2]          preamble — discard
     stream[2:514]        dss[0:512]
@@ -356,7 +356,7 @@ returns, verified byte-for-byte against the player's own JSMYTHE001.dss):
 Single fixup: dss[792] = 0xFE (player sets it; stream carries 0xFF).
 
 Extractor: `src/ds330tool.py` `extract_dss()` — used by `ds330tool download`;
-output verified byte-identical to the player's JSMYTHE001.dss; ffmpeg converts
+output verified byte-identical to the player's output for the same recording; ffmpeg converts
 it (`ffmpeg -i out.dss out.wav` → 11.025 kHz mono, 23:03 duration, DSS-SP
 codec). `src/extract_dss.py` keeps the legacy FULL-SESSION layout (393-byte
 preamble; applies only to captures that include the pre-`80 00` traffic).

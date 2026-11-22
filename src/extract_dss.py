@@ -3,7 +3,7 @@
 Olympus DS-330 (via the DSXUSB protocol or usbmon capture).
 
 Layout of the raw stream (verified byte-for-byte against the player's own
-output, JSMYTHE001.dss):
+output for the same recording):
   stream[0:393]        preamble (device file table), discarded
   stream[393:1417]     dss[0:1024]        (1024 bytes)
   stream[1417:4162]    device info blob (2745 bytes), discarded

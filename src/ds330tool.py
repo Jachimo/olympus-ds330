@@ -367,7 +367,7 @@ def extract_dss(stream: bytes) -> bytes:
     The data-phase stream (what the device sends after the `80 00`
     command) interleaves the DSS file with device bookkeeping frames.
     Layout (verified byte-for-byte against the player's own output
-    for the JSMYTHE001 recording):
+    captured from the device):
 
       stream[0:2]      2-byte preamble -- discard
       stream[2:514]    dss[0:512]                 (first block, no leading frame)
@@ -403,7 +403,7 @@ def parse_file_info(info: bytes):
     """Parse the 17-page (1088 B) file info object -> dict (best effort).
 
     Offsets (bytes within the concatenated object, verified against the
-    captured player stream for the JSMYTHE001 recording):
+    captured player stream captured from the device):
       [0x00:0x08]  file name, 8 ASCII chars
       [0x09]       0x02 = DSS file-format version byte (part of the
                    `02 'dss'` magic from the file header)
