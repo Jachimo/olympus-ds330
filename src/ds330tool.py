@@ -409,8 +409,9 @@ def parse_file_info(info: bytes):
                    `02 'dss'` magic from the file header)
       [0x0A:0x0D]  'dss' literal
       [0x15:0x1D]  author label, 8 ASCII chars (matches 0x95 response)
-      [0x30:0x44]  date digits, ASCII (Olympus packed encoding, unexplained)
-      [0x44:0x51]  date digits continuation (spans into page 1)
+      [0x30:0x4E]  date digits, ASCII: 30 digits = start and stop
+                   YYMMDDHHMMSS timestamps + HHMMSS duration
+                   (spans the page-0/page-1 boundary)
       page 8 (object offset 8*64), byte +0x09:
                    LE dword 0x00152790 -- a flash-region/metadata size,
                    NOT the file size (actual DSS is 2,397,696 bytes)
@@ -420,11 +421,49 @@ def parse_file_info(info: bytes):
     name = info[0:8].decode("ascii", "replace").strip()
     magic = info[10:13]
     label = info[21:29].decode("ascii", "replace").strip()
-    date_digits = (info[48:64] + info[64:77]).decode("ascii", "replace")
+    date_digits = (info[48:64] + info[64:78]).decode("ascii", "replace")
     size = struct.unpack("<I", info[8 * 64 + 9:8 * 64 + 13])[0]
     return {"name": name or None, "format": magic.decode("ascii", "replace"),
             "label": label or None, "date_digits": date_digits,
+            "dates": decode_date_digits(date_digits),
             "flash_region": size}
+
+
+def decode_date_digits(digits):
+    """Decode the 30 ASCII digit stamps in the file-info object.
+
+    Layout (deduced from the captured reference recording, whose player
+    output was ~23 minutes long):
+      digits[0:12]   start timestamp, YYMMDDHHMMSS
+      digits[12:24]  stop timestamp,  YYMMDDHHMMSS
+      digits[24:30]  duration,        HHMMSS
+    stop - start matches the duration, which confirms the split. A
+    recorder with an unset clock stamps files with its power-on default
+    (observed: 2002-01-01 00:01:05).
+
+    Returns {"start", "stop", "duration"} or None if the digits are
+    absent or do not parse (e.g. no file on device).
+    """
+    digits = (digits or "").strip("\x00\xff ")
+    if len(digits) < 30 or not digits[:30].isdigit():
+        return None
+    d = digits[:30]
+
+    def ts(s):
+        try:
+            return datetime.datetime.strptime(s, "%y%m%d%H%M%S")
+        except ValueError:
+            return None
+
+    start, stop = ts(d[0:12]), ts(d[12:24])
+    try:
+        dur = datetime.timedelta(hours=int(d[24:26]), minutes=int(d[26:28]),
+                                 seconds=int(d[28:30]))
+    except ValueError:
+        dur = None
+    if start is None or stop is None or dur is None:
+        return None
+    return {"start": start, "stop": stop, "duration": dur}
 
 
 # -- CLI -------------------------------------------------------------------
@@ -449,14 +488,23 @@ def cmd_info(dev, args):
         fi = parse_file_info(info)
         print(f"file   : {fi.get('name')}  ({fi.get('format')})  "
               f"label={fi.get('label')}  flash_region={fi.get('flash_region')}")
-        print(f"dates  : {fi.get('date_digits')!r}")
+        dates = fi.get("dates")
+        if dates:
+            print(f"dates  : start {dates['start']:%Y-%m-%d %H:%M:%S}  "
+                  f"stop {dates['stop']:%Y-%m-%d %H:%M:%S}  "
+                  f"duration {dates['duration']}")
+        else:
+            print(f"dates  : {fi.get('date_digits')!r} (unparsed)")
+    else:
+        print("file   : (none -- no recordings on device)")
 
 
 def cmd_download(dev, args):
     def progress(total, dt):
         print(f"  {total:8d} bytes ({dt:5.1f}s)", file=sys.stderr)
     print("downloading raw stream ...", file=sys.stderr)
-    info, stream = dev.download_raw(progress=progress if args.verbose else None)
+    info, stream = dev.download_raw(progress=progress if args.verbose else None,
+                                    file_index=args.index)
     print(f"raw stream: {len(stream)} bytes", file=sys.stderr)
     dss = extract_dss(stream)
     name = (parse_file_info(info).get("name") or "recording")
@@ -489,6 +537,10 @@ def main(argv=None):
     sub.add_parser("info", help="show device identity, folders, file table")
 
     d = sub.add_parser("download", help="download the .dss recording(s)")
+    d.add_argument("--index", "-i", metavar="N", type=int, default=1,
+                   help="file number to download, 1-based (default: 1). "
+                        "Only one recording can be addressed per session; "
+                        "for further files, run download again with the next N")
     d.add_argument("--out", metavar="FILE", help="output .dss path (default: <name>.dss)")
     d.add_argument("--raw", metavar="FILE", help="also save the raw stream")
     d.add_argument("--wav", nargs="?", const=True, metavar="FILE",
