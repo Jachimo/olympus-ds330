@@ -1,15 +1,16 @@
 # ds330tool — Olympus DS-330 on Linux
 
-`ds330tool` talks to the Olympus DS-330 digital voice recorder (ca. 2002)
-over USB and downloads its `.dss` recordings — natively on Linux, with no
-Windows software required. It also sets the recorder's clock.
+`ds330tool` is a command-line tool for working with the Olympus DS-330 
+digital voice recorder (c. 2002) over USB. It allows downloading and clock
+sync.
 
 The DS-330's USB protocol is proprietary; this tool was built by
-reverse-engineering the wire traffic of the original Windows DSS Player
-software. The full protocol is documented in
+reverse-engineering the wire traffic of the original Windows-only _DSS Player_
+software. The full protocol is documented in 
 [docs/DS-330_PROTOCOL.md](docs/DS-330_PROTOCOL.md).
+Corrections and further technical information are always appreciated.
 
-## Features
+## Commands
 
 - `info` — device identity, folders, file table, recording dates
 - `download` — download recordings as `.dss` (byte-identical to what the
@@ -19,11 +20,11 @@ software. The full protocol is documented in
 
 ## Requirements
 
-- Linux with libusb-1.0 (every mainstream distro ships it)
-- Python 3.8+ (only the standard library; `libusb` is loaded via `ctypes`)
-- `ffmpeg` (optional) for `--wav` conversion of the DSS recordings
+- Linux with libusb-1.0
+- Python 3.8+ (`libusb` loaded via `ctypes`)
+- `ffmpeg` (optional, for `--wav` conversion of the DSS recordings)
 
-## Install
+## Installation
 
 1. Install the udev rule so the device is usable without root:
 
@@ -31,9 +32,11 @@ software. The full protocol is documented in
    sudo cp udev/99-ds330.rules /etc/udev/rules.d/
    sudo udevadm control --reload && sudo udevadm trigger
    ```
+   
+   This is technically optional, but highly recommended.
 
 2. Plug in the recorder (or replug it after installing the rule), then
-   run straight from the checkout:
+   run from the checkout:
 
    ```sh
    python3 src/ds330tool.py info
@@ -46,7 +49,7 @@ python3 src/ds330tool.py info                  # device, folders, file table
 python3 src/ds330tool.py download              # download first recording
 python3 src/ds330tool.py download -i 2 --wav   # second recording, convert
 python3 src/ds330tool.py settime               # sync recorder clock to PC
-python3 src/ds330tool.py reset                # recover wedged device
+python3 src/ds330tool.py reset                 # recover wedged device
 ```
 
 Downloads are written as `<name>.dss` (override with `--out FILE`);
@@ -80,9 +83,3 @@ Downloads are written as `<name>.dss` (override with `--out FILE`);
 ## License
 
 GPL-3.0 — see [LICENSE](LICENSE).
-
-## Credits
-
-Protocol reverse-engineered from USB captures of the original Olympus
-DSS Player 2002 software, with help from the DSS Player driver
-disassembly. See `docs/` for the full investigation.
