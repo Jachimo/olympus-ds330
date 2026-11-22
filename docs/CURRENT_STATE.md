@@ -64,12 +64,15 @@ All details in `docs/DS-330_PROTOCOL.md` §9. Summary:
 
 ## Remaining open questions (nice-to-have, not blockers)
 
-1. **Date encoding** in file info (`"20101000105020101002412002306"`):
-   Olympus-specific packed-ASCII date; parse not yet done (raw digits
-   displayed by the tool).
-2. **Multiple files**: only one file exists on the device; the download
-   sequence for file #N presumably uses selector byte N in `18 01 NN` —
-   untested (no second recording available).
+1. **Date encoding: SOLVED (2026-11-22).** The 30 ASCII digits are two
+   YYMMDDHHMMSS timestamps (record start, record stop) plus an HHMMSS
+   duration; stop − start matches the duration. `decode_date_digits()`
+   in ds330tool.py parses them; `info` prints human-readable dates.
+   (Device currently holds no recordings, so the live object could not
+   be re-verified — validated against the captured reference digits.)
+2. **Multiple files**: `download --index N` now sends `18 01 NN` with
+   the file-selector byte; still untested with >1 recording on device
+   (device is currently empty — record two files and verify).
 3. **`--wav` conversion** shells out to ffmpeg; DSS-SP decode otherwise
    unsupported natively.
 
@@ -82,3 +85,8 @@ All details in `docs/DS-330_PROTOCOL.md` §9. Summary:
 - 2026-11-21 (later): `ds330tool.py` written and validated live:
   download byte-identical to player output; info verified; settime frame
   decoded from capture (`90 YYMMDDHHMMSS`). Docs updated.
+- 2026-11-22: `github` publish branch created (private analysis/, logs/,
+  archive/ stripped from history via git-filter-repo). Date encoding
+  solved; `--index` selector added; udev rule shipped; GPL-3.0 added;
+  README rewritten for end users. Live checks ran clean on the now-empty
+  device (empty-state handling verified).
