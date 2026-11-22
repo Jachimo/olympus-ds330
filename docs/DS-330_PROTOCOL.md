@@ -238,3 +238,64 @@ Full 2-byte scan with arg=0x00, reset between each probe:
 0xc0 00 returned different content on two separate sessions (first: 26-byte
 calibration-looking blob, second: 26-byte different blob). This command may
 be one-shot per enumeration or returns rolling data.
+
+### 0x93 file-read command (2026-11-20, from DSXUSB.SYS + DSXUSB.DLL analysis)
+
+Confirmed wire frame for the file-data read path:
+
+```
+BULK OUT 0x02:  93 <mode> <count_lo> <count_hi>
+```
+
+Modes (from DsXIoctlOpenDSSFileUp, SYS:0x1167e, IOCTL 0x98ff2070):
+- mode 0 -> count 0x0144 (324 bytes)
+- mode 1 -> count 0x001c (28 bytes)
+- mode 2 -> count 0x00c9 (201 bytes)
+- mode 3 -> count 0x0144 (324 bytes)
+
+DLL side (DSXDownloadDataBase at 0x100031e0) confirms: it allocates a
+325-byte stack buffer, writes ONLY buffer[0] = mode byte, and passes it
+to IOCTL 0x98ff2070. The kernel driver builds the actual 4-byte wire
+frame from the mode byte. On success the DLL calls 0x10003e20 (status
+drain) then 0x10003d70 (data read into caller buffer) — and it requires
+the status drain to return 2 before reading data.
+
+Probe result (probe93.py, mode 0, cold session):
+- OUT 93 00 44 01 -> accepted (sent=4)
+- INT status: ffff000001000000  = REJECTED
+- Bulk IN: timeout (r=-7), 0 bytes
+
+Conclusion: the 4-byte 93 frame is the correct wire format, but the
+device rejects it from a cold session. A session-state prerequisite is
+required — likely an init/handshake sequence (possibly the 0xc0 command,
+which is non-deterministic and may be a session seed exchange) or a
+prior file-select command. The real DSS Player performs this sequence
+before every download.
+
+## Caller-Side Sequencing (see docs/DICTWND_ANALYSIS.md)
+
+DictWnd.exe resolves all 32 DSXUSB exports and drives the download:
+InitUSBPort -> ConectConfirm -> GetFileNum -> GetFileInfoFirst/Next ->
+OpenFile/ReadFile per file. DSXDownloadDataBase (the 325-byte buffer IOCTL)
+is called at >=10 sites, implying per-file or per-chunk transfers. The
+`93 <mode> <count>` wire frame's mode/count semantics must be confirmed by
+capturing a real download in a Windows VM.
+
+## Raw stream → DSS extraction (SOLVED, 2026-11-21)
+
+The bulk-in stream captured during a player download is the DSS file with
+insertions. Layout (verified byte-for-byte against the player's output):
+
+    stream[0:393]        preamble (device file table) — discard
+    stream[393:1417]     dss[0:1024]
+    stream[1417:4162]    device info blob (2745 bytes) — discard
+    stream[4162:4674]    dss[1024:1536]
+    stream[4674:4738]    64-byte frame — discard
+    stream[4738+576k]    64-byte frame (discard) + 512 bytes dss, repeating
+    stream tail          folder-name table (DICTATE/LECTURE/TO DO/RANDOM) — discard
+
+Single fixup: dss[792] = 0xFE (player sets it; stream carries 0xFF).
+
+Extractor: `src/extract_dss.py raw_stream.bin out.dss` — output is
+byte-identical to JSMYTHE001.dss and converts cleanly with ffmpeg
+(`ffmpeg -i out.dss out.wav` → 11.025 kHz mono, 23:03 duration, DSS-SP codec).

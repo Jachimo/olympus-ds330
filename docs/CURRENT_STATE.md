@@ -135,3 +135,40 @@ space (0x00-0xff) swept twice: only the commands listed above respond.
 
 Try the Windows VM/QEMU + usbmon capture approach. This avoids blind
 probing and gives us the exact wire bytes the Olympus software uses.
+
+## Wine Status (Nov 21)
+
+- DSS Player 2002 fully installed in wineprefix (installer ran; serial gate
+  applies to registration only, not runtime).
+- DSSPlay.exe (player) runs under Wine; DictWnd.exe (downloader) also runs and
+  shows the Download Tray UI with no serial prompt.
+- Wine CANNOT access the DS-330: the device path goes through
+  DSXUSB.dll -> DeviceIoControl("\\\\.\\DSXUSB0") -> DSXUSB.SYS kernel driver,
+  which Wine cannot load. No device enumeration in the player's Device Manager.
+- usbmon capture attempted while Wine was running: captured only background
+  bus traffic, no player traffic.
+
+## DictWnd Static Analysis
+
+See docs/DICTWND_ANALYSIS.md. DictWnd resolves all 32 DSXUSB exports at
+runtime and drives the download sequence via thin shims.
+
+## Next Steps
+
+1. Windows VM (QEMU/KVM) with USB passthrough of the DS-330.
+2. Install DRIVERS/DSX (DSXUSB.INF + DSXUSB.SYS + DSXUSB.DLL) standalone --
+   no serial needed.
+3. Copy wineprefix/drive_c/Program Files/DSSPlayer2002 into the VM (bypasses
+   installer serial gate entirely).
+4. Run DictWnd.exe in the VM, download JSMYTHE001, capture with usbmon on host
+   (sudo tcpdump -i usbmon2 -s0 -w logs/usbmon2_dictwnd.pcap).
+5. Compare captured wire bytes against DSXUSB.SYS handler analysis
+   (docs/DS-330_PROTOCOL.md) to resolve the 0x93 mode/count semantics and
+   the 325-byte DownloadDataBase buffer layout.
+
+## 2026-11-21 — GOAL ACHIEVED (data path solved)
+- Raw stream → DSS extraction rule fully decoded and verified byte-for-byte.
+- `src/extract_dss.py` produces a DSS file identical to the player's output;
+  ffmpeg converts it to 23:03 WAV (DSS-SP codec).
+- Remaining: automate raw-stream acquisition on Linux end-to-end (the
+  probe/`93`-command path works but is slow); extraction itself is proven.
