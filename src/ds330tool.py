@@ -690,21 +690,8 @@ def resolve_folder(spec: str) -> int:
                     "(DICTATE/LECTURE/TO DO/RANDOM)")
 
 
-def cmd_download(dev, args):
-    def progress(total, dt):
-        print(f"  {total:8d} bytes ({dt:5.1f}s)", file=sys.stderr)
-    print("downloading raw stream ...", file=sys.stderr)
-    fi, stream = dev.download_raw(
-        folder=resolve_folder(args.folder),
-        file_index=args.index,
-        progress=progress if args.verbose else None)
-    print(f"raw stream: {len(stream)} bytes", file=sys.stderr)
-    if not stream:
-        raise ProtocolRejected("device returned no data -- "
-                               "no recording in that folder at that index?")
+def save_recording(stream, fi, out, args):
     dss = extract_dss(stream)
-    name = (fi or {}).get("name") or "recording"
-    out = os.path.expanduser(args.out or f"{name.lower()}.dss")
     with open(out, "wb") as f:
         f.write(dss)
     print(f"wrote {len(dss)} bytes -> {out}")
@@ -716,6 +703,68 @@ def cmd_download(dev, args):
         wav = args.wav if args.wav is not True else os.path.splitext(out)[0] + ".wav"
         ffmpeg_convert(out, wav)
         print(f"converted -> {wav}")
+    return out
+
+
+def cmd_download_one(dev, args):
+    def progress(total, dt):
+        print(f"  {total:8d} bytes ({dt:5.1f}s)", file=sys.stderr)
+    print("downloading raw stream ...", file=sys.stderr)
+    fi, stream = dev.download_raw(
+        folder=resolve_folder(args.folder),
+        file_index=args.index,
+        progress=progress if args.verbose else None)
+    print(f"raw stream: {len(stream)} bytes", file=sys.stderr)
+    if not stream:
+        raise ProtocolRejected("device returned no data -- "
+                               "no recording in that folder at that index?")
+    name = (fi or {}).get("name") or "recording"
+    out = os.path.expanduser(args.out or f"{name.lower()}.dss")
+    return save_recording(stream, fi, out, args)
+
+
+def cmd_download_all(dev, args):
+    """Default (no --folder/--index): download every recording from every
+    folder. There is no directory-listing command, so files are found by
+    probing `18 <folder> <file>`: an empty data stream cleanly signals
+    the end of a folder's file list (established live). Output files are
+    named <letter><NN>.dss (A01.dss, E02.dss, ...).
+    """
+    total = 0
+    for folder in range(1, 6):
+        letter = chr(ord("A") + folder - 1)
+        index = 1
+        while True:
+            try:
+                fi, stream = dev.download_raw(folder=folder, file_index=index)
+            except (TimeoutError, UsbError) as e:
+                print(f"  {letter}{index:02d}: {e}; resetting and retrying",
+                      file=sys.stderr)
+                dev.reset()
+                fi, stream = dev.download_raw(folder=folder, file_index=index)
+            if not stream:
+                if index == 1:
+                    print(f"folder {letter}: (empty)")
+                break
+            out = os.path.expanduser(
+                args.out if (args.out and folder == 1 and index == 1)
+                else f"{letter}{index:02d}.dss")
+            save_recording(stream, fi, out, args)
+            total += 1
+            index += 1
+    print(f"downloaded {total} recording(s)")
+    if total == 0:
+        raise ProtocolRejected("no recordings found in any folder")
+
+
+def cmd_download(dev, args):
+    if args.folder is None and args.index is None and not args.out:
+        return cmd_download_all(dev, args)
+    if args.folder is None:
+        args.folder = "1"
+    if args.index is None:
+        args.index = 1
+    return cmd_download_one(dev, args)
 
 
 def cmd_reset(dev, args):
@@ -732,12 +781,15 @@ def main(argv=None):
 
     sub.add_parser("info", help="show device identity, folders, file table")
 
-    d = sub.add_parser("download", help="download a .dss recording")
-    d.add_argument("--folder", "-f", metavar="FOLDER", default="1",
+    d = sub.add_parser("download", help="download .dss recordings (default: "
+                                         "all recordings from all folders)")
+    d.add_argument("--folder", "-f", metavar="FOLDER", default=None,
                    help="device folder to read from: 1-5, A-E, or name "
-                        "(DICTATE/LECTURE/TO DO/RANDOM). Default: 1 (A)")
-    d.add_argument("--index", "-i", metavar="N", type=int, default=1,
-                   help="file number within the folder, 1-based (default: 1)")
+                        "(DICTATE/LECTURE/TO DO/RANDOM). Default with no "
+                        "options: sweep every folder")
+    d.add_argument("--index", "-i", metavar="N", type=int, default=None,
+                   help="file number within the folder, 1-based. Default "
+                        "with no options: sweep every folder")
     d.add_argument("--out", metavar="FILE",
                    help="output .dss path (default: <name>.dss)")
     d.add_argument("--raw", metavar="FILE", help="also save the raw stream")

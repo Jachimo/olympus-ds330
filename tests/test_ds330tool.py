@@ -10,6 +10,7 @@ fixtures (tests/data/, captured 2026-11-22 from a live DS-330 via the
 Pure-protocol tests use a FakeUsb that replays scripted frame/status/data
 responses, so run_sequence()'s frame rules are tested without hardware.
 """
+import argparse
 import datetime
 import os
 import struct
@@ -350,3 +351,38 @@ def test_resolve_folder(spec, expected):
 def test_resolve_folder_rejects(bad):
     with pytest.raises(t.DS330Error):
         t.resolve_folder(bad)
+
+
+# ---------------------------------------------------------------------------
+# download-all sweep (default `download` behavior)
+# ---------------------------------------------------------------------------
+
+def test_cmd_download_all_sweeps_folders(tmp_path, monkeypatch, capsys):
+    # folder 1 -> one file; folder 2 -> none; folder 5 -> two files
+    streams = {(1, 1): b"x" * 700, (2, 1): b"", (3, 1): b"",
+               (4, 1): b"", (5, 1): b"y" * 700, (5, 2): b"z" * 700}
+
+    class FakeDev:
+        def download_raw(self, folder=1, file_index=1, progress=None):
+            return {"name": f"F{folder}{file_index}"}, streams.get((folder, file_index), b"")
+
+    args = t.argparse.Namespace(folder=None, index=None, out=None,
+                                raw=None, wav=None, verbose=False)
+    monkeypatch.chdir(tmp_path)
+    t.cmd_download_all(FakeDev(), args)
+    out = capsys.readouterr().out
+    assert "downloaded 3 recording(s)" in out
+    for name in ("A01.dss", "E01.dss", "E02.dss"):
+        assert (tmp_path / name).exists(), name
+
+
+def test_cmd_download_all_empty_device(tmp_path, monkeypatch):
+    class FakeDev:
+        def download_raw(self, folder=1, file_index=1, progress=None):
+            return None, b""
+
+    args = t.argparse.Namespace(folder=None, index=None, out=None,
+                                raw=None, wav=None, verbose=False)
+    monkeypatch.chdir(tmp_path)
+    with pytest.raises(t.ProtocolRejected):
+        t.cmd_download_all(FakeDev(), args)
