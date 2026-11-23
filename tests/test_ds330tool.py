@@ -376,15 +376,14 @@ def test_ds330_resolve_folder_queries_device():
             # each folder_names() session reads 7 pages: init,
             # device-info, then 47 01..05 (folder A is read #3, blank).
             pos = self.n % 7 or 7
-            if pos <= 3:
-                return b"\x00" * 64
-            return b"\x00" * 4 + b"DAYNOTE " + b"\x00" * 56
+            if pos == 4:  # folder B's name page (47 02)
+                return b"\x00" * 4 + b"DAYNOTE " + b"\x00" * 56
+            return b"\x00" * 64
 
     dev = t.DS330(usb=FakeUsbNames())
-    # folder A is unnamed; B-E all read DAYNOTE on this fake device
-    assert dev.folder_names() == ["DAYNOTE"] * 4
-    assert dev.folder_names(include_a=True) == ["", "DAYNOTE", "DAYNOTE",
-                                                "DAYNOTE", "DAYNOTE"]
+    # only folder B is named DAYNOTE on this fake device; A, C-E unnamed
+    assert dev.folder_names() == ["DAYNOTE", "", "", ""]
+    assert dev.folder_names(include_a=True) == ["", "DAYNOTE", "", "", ""]
     assert dev.resolve_folder("daynote") == 2
 
 
@@ -507,3 +506,11 @@ def test_cmd_rename_uses_resolved_folder(monkeypatch, capsys):
     t.cmd_rename(FakeDev(), args)
     assert calls == {"spec": "lecture", "folder": 3, "name": "IDEAS"}
     assert "folder C: 'LECTURE' -> 'IDEAS'" in capsys.readouterr().out
+
+
+def test_resolve_folder_duplicate_names_refused():
+    # the device accepts duplicate folder names (verified live); the CLI
+    # must refuse to guess which folder a bare name refers to
+    names = ["DAYNOTE", "DAYNOTE", "LECTURE", "TO DO", "RANDOM"]
+    with pytest.raises(t.DS330Error, match="folders A/B are all named"):
+        t.resolve_folder("daynote", names=names)

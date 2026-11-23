@@ -804,9 +804,17 @@ def resolve_folder(spec, names=None):
     if s.isdigit() and 1 <= int(s) <= 5:
         return int(s)
     if names:
-        for i, name in enumerate(names[:5]):
-            if name and name.strip().lower() == s:
-                return i + 1
+        matches = [i + 1 for i, n in enumerate(names[:5])
+                   if n and n.strip().lower() == s]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            # the device happily stores duplicate names (verified live);
+            # refuse to guess which one the user means
+            letters = "/".join(chr(ord("A") + m - 1) for m in matches)
+            raise DS330Error(
+                f"folders {letters} are all named {spec!r} on this device "
+                "-- select one by letter or number instead")
         raise DS330Error(
             f"no folder named {spec!r} on this device. Folders: "
             + ", ".join(f"{chr(ord('A') + i)}='{n}' or (unnamed)" if n
