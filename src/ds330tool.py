@@ -476,10 +476,14 @@ class DS330:
                 raise ProtocolRejected(
                     f"unexpected status {status.hex()} for {step.key()!r}")
             if step.pages:
+                # pages of a real data stage arrive back-to-back; if none
+                # come, this is an "empty" data stage (exhausted folder
+                # list) — time out fast, unlike the interrupt status which
+                # can legitimately take seconds on a stale device
                 data = bytearray()
                 for _ in range(step.pages):
                     try:
-                        data += self.usb.bulk_in()
+                        data += self.usb.bulk_in(timeout_ms=1000)
                     except TimeoutError:
                         break
                 results[step.key()] = bytes(data)
@@ -514,7 +518,7 @@ class DS330:
                 raise
             return resolve_folder(spec, names=self.folder_names())
 
-    def enumerate_files(self, folder: int) -> list:
+    def enumerate_files(self, folder: int, notify=None) -> list:
         """§9.3: the complete file table of one folder.
 
         `40 NN` returns the folder's first file info; repeated `41 NN`
@@ -522,33 +526,45 @@ class DS330:
         (per-session cursor, resets on USB reconnect). Order matters:
         this must run before the label/memory queries.
         """
+        say = notify or (lambda msg: None)
         files = []
         r = self.run_sequence([FILE_INFO], folder=folder)
         data = r.get(FILE_INFO.key(), b"")
         if not data:
             return files
         files.append(parse_file_info(data) or {})
+        say(f"  {chr(ord('A') + folder - 1)}01: {files[0].get('name')}")
         for _ in range(99):  # hard cap; folders max out far below this
             r = self.run_sequence([FILE_INFO_NEXT], folder=folder)
             data = r.get(FILE_INFO_NEXT.key(), b"")
             if not data:
                 break
             files.append(parse_file_info(data) or {})
+            say(f"  {chr(ord('A') + folder - 1)}{len(files):02d}: "
+                f"{files[-1].get('name')}")
         return files
 
-    def info(self) -> dict:
+    def info(self, notify=None) -> dict:
         """Device identity, label, folders, memory, full file table.
 
         Query order matters (established live): file-info queries (`40`/
         `41`) stop being answered after the label (`95 00`) or memory
         (`79 00`) queries, so the file table is enumerated first.
+        `notify(msg)` receives human-readable progress lines (or pass
+        None for silence).
         """
+        say = notify or (lambda msg: None)
+        say("connecting and initializing device ...")
         r = self.run_sequence(info_sequence())
+        say("scanning folder names ...")
         folders = [p[4:12].decode("ascii", "replace").strip()
                    for f in FOLDER_SCAN[1:] if len(p := r.get(f.key(), b"")) >= 12]
         file_table = {}
         for folder in range(1, 6):
-            file_table[folder] = self.enumerate_files(folder)
+            letter = chr(ord("A") + folder - 1)
+            say(f"enumerating files in folder {letter} ...")
+            file_table[folder] = self.enumerate_files(folder, notify=notify)
+        say("reading label and memory ...")
         label = self._query(LABEL_QUERY)
         memory = self._query(MEMORY_QUERY)
         return {
@@ -707,7 +723,9 @@ def ffmpeg_convert(dss_path, wav_path):
 
 
 def cmd_info(dev, args):
-    i = dev.info()
+    def notify(msg):
+        print(msg, file=sys.stderr)
+    i = dev.info(notify=notify)
     print(f"device : {i['device']}")
     print(f"label  : {i['label']}")
     print(f"folders: A, " + ", ".join(
