@@ -454,3 +454,58 @@ def test_save_recording_sets_mtime_to_stop(tmp_path):
     stop = datetime.datetime(2026, 11, 23, 0, 57, 1).timestamp()
     assert abs(st.st_mtime - stop) < 1
     assert abs(st.st_atime - stop) < 1
+
+
+# ---------------------------------------------------------------------------
+# delete-after-download (issue #4)
+# ---------------------------------------------------------------------------
+
+def test_delete_file_frame():
+    fake = FakeUsb([(ACCEPT_NO, [])])
+    dev = t.DS330(usb=fake)
+    # delete_file resets afterwards; stub the reset
+    dev.reset = lambda: None
+    dev.delete_file(5, 2)
+    page = fake.sent[0]
+    assert page[:6] == b"\xa0\x05" + b"\x02\x00" * 2
+    assert len(page) == 64
+
+
+def test_delete_after_only_on_verified_write(tmp_path, capsys):
+    dss = b"\xfe" * 700
+    stream = bytearray(b"\x00" * (2 + 512 + 64 + 512))
+    stream[40:52] = b"261123005622"
+    stream = bytes(stream)
+
+    class FakeDev:
+        deleted = []
+
+        def delete_file(self, folder, index):
+            self.deleted.append((folder, index))
+
+    args = t.argparse.Namespace(raw=None, wav=None, verbose=False,
+                                delete_after=True)
+    out = str(tmp_path / "x.dss")
+    # file not written yet -> verification fails -> NO delete, clear error
+    with pytest.raises(t.DS330Error, match="NOT deleting"):
+        t.delete_after(FakeDev(), 5, 1, out, dss)
+    assert FakeDev.deleted == []
+
+
+def test_delete_after_deletes_on_match(tmp_path, capsys):
+    dss = b"\xfe" * 700
+    out = str(tmp_path / "y.dss")
+    with open(out, "wb") as f:
+        f.write(dss)
+
+    class FakeDev:
+        deleted = []
+
+        def delete_file(self, folder, index):
+            self.deleted.append((folder, index))
+
+    args = t.argparse.Namespace(raw=None, wav=None, verbose=False,
+                                delete_after=True)
+    t.delete_after(FakeDev(), 5, 1, out, dss)
+    assert FakeDev.deleted == [(5, 1)]
+    assert "deleted E01 from device" in capsys.readouterr().out

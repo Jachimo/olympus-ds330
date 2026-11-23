@@ -19,7 +19,10 @@ Corrections and further technical information are always appreciated.
   Windows player produces), optionally converting to `.wav` via ffmpeg.
   With no options it downloads every recording from every folder, naming
   files by folder and record-start timestamp (`E01_20261123T005622.dss`)
-  and preserving the record time in the file's mtime. Folder names are
+  and preserving the record time in the file's mtime. `--delete-after`
+  removes each recording from the device once its downloaded file is
+  verified byte-identical on disk (opt-in, never the default).
+  Folder names are
   read live from the recorder (they are user-settable, per device)
 - `settime` — set the recorder's clock from the computer clock
 - `reset` — recover a wedged device without unplugging
@@ -54,6 +57,7 @@ Corrections and further technical information are always appreciated.
 python3 src/ds330tool.py info                  # device, folders, file table
 python3 src/ds330tool.py download              # every recording, all folders
 python3 src/ds330tool.py download -f E -i 2 --wav  # one recording (folder E, file 2), convert
+python3 src/ds330tool.py download --delete-after  # sweep, then delete each verified download
 python3 src/ds330tool.py settime               # sync recorder clock to PC
 python3 src/ds330tool.py reset                 # recover wedged device
 ```

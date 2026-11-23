@@ -377,6 +377,16 @@ STREAM = StreamPhase()
 SET_TIME = Frame(b"\x90", name="set-time",
                  suffix=lambda p: p["when"].strftime("%y%m%d%H%M%S").encode("ascii"))
 
+# §9.9 file delete (decoded from DSXUSB.SYS, live-verified 2026-11-23):
+# `A0 <folder 1-5> <file WORD LE> <file WORD LE>` — the two WORDs carry
+# the same 1-based file index (the device's duplicated-data pattern).
+# A delete of a nonexistent file is silently accepted. The device wedges
+# briefly after a successful delete and needs a reset before the next
+# operation (observed live).
+DELETE_FILE = Frame(b"\xA0", name="delete-file",
+                    suffix=lambda p: bytes([p["folder"]])
+                    + p["file_index"].to_bytes(2, "little") * 2)
+
 # §9.7: single-frame queries used by `info`
 LABEL_QUERY = Frame(b"\x95\x00", pages=1, name="label")
 MEMORY_QUERY = Frame(b"\x79\x00", pages=1, name="memory")
@@ -596,6 +606,16 @@ class DS330:
                               folder=folder, file_index=file_index)
         fi = parse_file_info(r.get(FILE_INFO.key())) or None
         return fi, r.get(STREAM.name, b"")
+
+    def delete_file(self, folder: int, file_index: int):
+        """§9.9: `A0 <folder> <file WORD x2>` (live-verified).
+
+        Deletes the file from the device. The device reliably wedges
+        right after a successful delete (observed live: the next frame
+        times out), so this resets and re-opens before returning.
+        """
+        self.run_sequence([DELETE_FILE], folder=folder, file_index=file_index)
+        self.reset()
 
     def set_time(self, when: Optional[datetime.datetime] = None
                  ) -> datetime.datetime:
@@ -833,6 +853,30 @@ def save_recording(stream, fi, out, args):
     return out
 
 
+def verified_on_disk(out: str, dss: bytes) -> bool:
+    """True if the file at `out` reads back byte-identical to the DSS we
+    extracted from the device stream. A delete is only ever sent after
+    this passes (issue #4's data-safety requirement)."""
+    try:
+        with open(out, "rb") as f:
+            return f.read() == dss
+    except OSError:
+        return False
+
+
+def delete_after(dev, folder, index, out, dss):
+    """Issue #4: delete the recording from the device only after its
+    bytes are confirmed on disk. Refuses (with a clear error) if the
+    verification fails, so a bad disk can never eat the only copy."""
+    if not verified_on_disk(out, dss):
+        raise DS330Error(
+            f"NOT deleting {chr(ord('A') + folder - 1)}{index:02d}: "
+            f"the written file {out!r} does not match the download -- "
+            "check your disk")
+    dev.delete_file(folder, index)
+    print(f"deleted {chr(ord('A') + folder - 1)}{index:02d} from device")
+
+
 def cmd_download_one(dev, args):
     def progress(total, dt):
         print(f"  {total:8d} bytes ({dt:5.1f}s)", file=sys.stderr)
@@ -849,9 +893,12 @@ def cmd_download_one(dev, args):
     letter = chr(ord("A") + folder - 1)
     fallback = (fi or {}).get("name") or f"{letter}{args.index:02d}"
     out = os.path.expanduser(args.out
-                                or f"{letter}{args.index:02d}_"
-                                   f"{recording_name(extract_dss(stream), fallback)}.dss")
-    return save_recording(stream, fi, out, args)
+                              or f"{letter}{args.index:02d}_"
+                                 f"{recording_name(extract_dss(stream), fallback)}.dss")
+    out = save_recording(stream, fi, out, args)
+    if getattr(args, "delete_after", False):
+        delete_after(dev, folder, args.index, out, extract_dss(stream))
+    return out
 
 
 def cmd_download_all(dev, args):
@@ -884,6 +931,8 @@ def cmd_download_all(dev, args):
                 else f"{letter}{index:02d}_{name}.dss")
             save_recording(stream, fi, out, args)
             total += 1
+            if getattr(args, "delete_after", False):
+                delete_after(dev, folder, index, out, extract_dss(stream))
             index += 1
     print(f"downloaded {total} recording(s)")
     if total == 0:
@@ -927,6 +976,10 @@ def main(argv=None):
     d.add_argument("--out", metavar="FILE",
                    help="output .dss path (default: <name>.dss)")
     d.add_argument("--raw", metavar="FILE", help="also save the raw stream")
+    d.add_argument("--delete-after", action="store_true",
+                   help="delete each recording from the device AFTER its "
+                        "downloaded file is verified on disk (never the "
+                        "default; data-safety per issue #4)")
     d.add_argument("--wav", nargs="?", const=True, metavar="FILE",
                    help="convert to .wav via ffmpeg")
 

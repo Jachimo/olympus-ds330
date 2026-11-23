@@ -99,8 +99,8 @@ All details in `docs/DS-330_PROTOCOL.md` §9. Summary:
    info per folder; `info` lists every recording with names and dates
    (live-verified with 3 files across folders A and E). The DSS header
    also carries per-file timestamps, used for naming and file mtimes.
-2. **Folder renaming** (the Windows software can set folder names) is
-   NOT yet decoded — a future feature.
+2. **Folder renaming**: wire frame decoded (`4A <folder> <8-byte
+   name>`) on the feature/rename-folders branch (PR #6).
 3. **`--wav` conversion** shells out to ffmpeg; DSS-SP decode otherwise
    unsupported natively.
 3. **`47 01` semantics** (file-count dword) and `79 00` (memory) encoding
@@ -127,3 +127,10 @@ All details in `docs/DS-330_PROTOCOL.md` §9. Summary:
   auto reset+retry for wedges; 8 s device timeout. Live download
   verified byte-identical to the captured reference (sanitized label
   aside).
+
+- 2026-11-23 (later): Issue #4 (delete after download) solved on branch
+  feature/delete-after-download. A0 delete frame live-verified
+  (nonexistent-file delete silently accepted; device wedges briefly
+  after a real delete, reset needed); --delete-after implemented with
+  on-disk byte verification before any delete. Both RANDOM recordings
+  used for live testing per owner instruction.

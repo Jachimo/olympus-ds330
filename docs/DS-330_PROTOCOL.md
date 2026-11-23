@@ -213,7 +213,7 @@ are kept for history:
 | GetFileInfoNext | `41 NN` (next file; empty = exhausted) | confirmed |
 | OpenFile/ReadFile | `18 <folder> <file>` + `80 00` data phase | confirmed |
 | SetPCTime | `90` + YYMMDDHHMMSS ASCII | confirmed |
-| DeleteFile | ? | none |
+| DeleteFile | `A0 <folder> <file WORD x2>` (§9.9) | confirmed |
 | SetFolderName | ? | none — future work |
 
 ### 0x47 — new discoveries (2026-11-20; numbering corrected 2026-11-22)
@@ -425,6 +425,19 @@ full player-session captures with their 393-byte preamble.
 ```
 e.g. captured frame `90 32 36 31 31 32 32 30 32 31 32 31 37` =
 `0x90` + `"261122021217"` = 2026-11-22 02:12:17. Response: accepted status.
+
+### 9.9 File delete (decoded 2026-11-23 from DSXUSB.SYS, live-verified)
+```
+A0 <folder 1-5> <file WORD LE> <file WORD LE>
+```
+- 6-byte frame; the two WORDs carry the same 1-based file index (the
+  device's duplicated-data pattern). Accepted with no data stage.
+- Deleting a nonexistent file is silently accepted (no error).
+- **The device wedges briefly after a successful delete** (observed
+  live): the next frame times out until a reset — reset+re-open right
+  after deleting.
+- Verified live: deleting RANDOM's file 2 then file 1; the file table
+  re-enumerates correctly and remaining files still download.
 
 ### 9.7 Session management notes (live-tested)
 - The device rejects `18 <folder> <file>` (file open) unless the §9.1+§9.2
