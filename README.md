@@ -1,8 +1,8 @@
 # ds330tool — Olympus DS-330 on Linux
 
 `ds330tool` is a command-line tool for working with the Olympus DS-330 
-digital voice recorder (c. 2002) over USB. It allows downloading and clock
-sync.
+digital voice recorder (c. 2002) over USB.
+Currently, it supports downloading recordings and recorder clock sync.
 
 ![Olympus DS-330 digital voice recorder](docs/ds-330_frontview.jpg)
 
@@ -16,7 +16,11 @@ Corrections and further technical information are always appreciated.
 
 - `info` — device identity, folders, file table, recording dates
 - `download` — download recordings as `.dss` (byte-identical to what the
-  Windows player produces), optionally converting to `.wav` via ffmpeg
+  Windows player produces), optionally converting to `.wav` via ffmpeg.
+  With no options it downloads every recording from every folder, naming
+  files by folder and record-start timestamp (`E01_20261123T005622.dss`)
+  and preserving the record time in the file's mtime. Folder names are
+  read live from the recorder (they are user-settable, per device)
 - `settime` — set the recorder's clock from the computer clock
 - `reset` — recover a wedged device without unplugging
 
@@ -48,8 +52,8 @@ Corrections and further technical information are always appreciated.
 
 ```sh
 python3 src/ds330tool.py info                  # device, folders, file table
-python3 src/ds330tool.py download              # download first recording
-python3 src/ds330tool.py download -i 2 --wav   # second recording, convert
+python3 src/ds330tool.py download              # every recording, all folders
+python3 src/ds330tool.py download -f E -i 2 --wav  # one recording (folder E, file 2), convert
 python3 src/ds330tool.py settime               # sync recorder clock to PC
 python3 src/ds330tool.py reset                 # recover wedged device
 ```
@@ -74,13 +78,28 @@ Downloads are written as `<name>.dss` (override with `--out FILE`);
 
 | Path | What |
 |---|---|
-| `src/ds330tool.py` | The tool |
+| `src/ds330tool.py` | The tool (transport / declarative protocol / executor layers) |
+| `tests/` | Pytest suite, built on fixtures captured from a live device |
 | `docs/DS-330_PROTOCOL.md` | Wire-protocol reference |
 | `docs/CURRENT_STATE.md` | Live project state, open questions |
 | `docs/DS-330_NOTES.md` | Background survey and project log |
 | `src/*.c`, `src/*.py` (other) | Probe/dump tools used during reverse-engineering; kept for reference |
 | `data/dsstimescript` | Third-party GPLv2 DSS filename helper (Alexey Fisher, 2006) |
 | `udev/` | udev rule for device access |
+
+## Development
+
+Run the test suite (no hardware needed — the USB layer is exercised via a
+scripted fake):
+
+```sh
+python3 -m pytest tests/
+```
+
+The `tests/data/` fixtures were captured from a real DS-330 (raw download
+stream, file-info object, reference DSS). When changing the stream parser,
+`test_extract_dss_real_stream_roundtrip` will catch regressions against
+the captured data.
 
 ## License
 

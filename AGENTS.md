@@ -1,17 +1,18 @@
-# AGENTS.md — DS-330 reverse-engineering workspace
+# AGENTS.md — DS-330 Linux driver
 
-Instructions for AI agents and humans continuing this investigation.
+Instructions for AI agents and humans continuing this project.
 
 ## Project
 
-Extract `.dss` recordings from an Olympus DS-330 over USB on Linux.
-The protocol is proprietary; everything is being reverse-engineered.
+`ds330tool` — a Linux tool for the Olympus DS-330 digital voice recorder:
+download `.dss` recordings, set the clock, inspect the device. The USB
+protocol is proprietary and was fully reverse-engineered (see docs/).
 
 ## Read first (in this order)
 
-1. `docs/CURRENT_STATE.md` — what is confirmed, what the current blocker is
-2. `docs/DS-330_PROTOCOL.md` — protocol reference (frame model, commands, status codes)
-3. `docs/DS-330_NOTES.md` — background survey (DSS decode landscape, alternative approaches)
+1. `docs/CURRENT_STATE.md` — what is confirmed, quirks, open questions
+2. `docs/DS-330_PROTOCOL.md` — protocol reference (frame model, commands,
+   status codes, session quirks)
 
 ## Working rules
 
@@ -20,37 +21,41 @@ The protocol is proprietary; everything is being reverse-engineered.
 - Record negative results (rejected commands, no-response probes) — they
   are as valuable as positives and prevent re-testing. The 2-byte command
   space has been swept twice already; don't re-sweep it.
-- Toolchain: Python 3.10 ctypes + system `libusb-1.0.so.0` is the proven
-  binding (`src/dumpall.py`, `src/probe_ctypes.py`, `src/cmdscan.py`).
-  Linuxbrew python3.14 does NOT work (missing libudev). C binaries compile
-  against `thirdparty/libusb-local/`.
-- Device resets between probe sessions via `libusb_reset_device()`
-  (`src/usbreset`); no replug needed. udev rule grants 0666.
+- The code has three layers (src/ds330tool.py): `Usb` transport,
+  declarative `Frame`/`StreamPhase` protocol model, and
+  `DS330.run_sequence()` executor. Protocol changes belong in the frame
+  definitions near the top of the protocol section, not in the executor.
+- Run `python3 -m pytest tests/` after any change. Hardware-free; the
+  `tests/data/` fixtures are real device captures (labels sanitized —
+  keep personal device data out of commits).
+- Toolchain: system python3 (3.10 verified) + system `libusb-1.0.so.0`
+  via ctypes. Linuxbrew python3.14 does NOT work (missing libudev).
 - Only USB interface 0 matters. Interfaces 1–4 are UAC1 audio, out of scope.
+- Branches: `private` holds internal artifacts (vendor binaries,
+  disassembly, raw logs) and is never pushed to GitHub (a pre-push hook
+  enforces this). `github` is the publish branch; feature work happens
+  on branches off it (e.g. `v1.0`).
 
 ## Known-good frame model (do not re-derive)
 
-1. BULK OUT 0x02: `[cmd][arg]` (1–2 bytes)
+1. BULK OUT 0x02: `[cmd][arg]` (1–2 bytes, zero-padded to 64-byte pages)
 2. INTERRUPT IN 0x83: 8-byte status; `06 00 00 00 01 00 00 00` = accepted,
    data stage follows; `ffff000001000000` = rejected
 3. BULK IN 0x81: 64-byte pages
 
+## Session quirks (live-established — see protocol doc §9.7)
+
+- Init + folder-scan warmup must precede file operations in a session.
+- Query file info (`40 NN`/`41 NN`) before label/memory (`95 00`/
+  `79 00`) — the device stops answering `40`/`41` after them.
+- A wedged device needs a reset (`ds330tool.py reset`); it can also take
+  >2 s to answer frames while wedged (tool uses an 8 s timeout).
+
 ## Open questions (from CURRENT_STATE.md)
 
-- How to read the actual `.dss` recording bytes (~1.38 MB in 32 MB flash).
-  No 2-byte command reaches it. Consider 3+ byte commands, session state,
-  or watch a real DSS Player session.
-- IOCTL→wire mapping of DSXUSB.DLL/SYS (0x98ff2004–0x98ff20a4).
-- Olympus-specific date/time encoding in file info pages.
-
-## Recommended next step
-
-Windows VM (QEMU/KVM) with USB passthrough, run real DSS Player 2002
-(`data/iso_root/`), capture wire bytes with `usbmon` on the host.
-
-## Environment
-
-- `wineprefix/` and `venv/` must stay at repo root (absolute paths inside).
-- `Olympus_DSS_Player_Software.ISO` is the source of `data/iso_root/` and
-  `thirdparty/wine-setup/` (both extracted from it).
-- `archive/` holds unrelated files (LLM debugging notes); ignore for this project.
+- Multi-file download: `18 <folder> <file>` verified with files in two
+  folders. The full file table is enumerable via `40 NN` (first) /
+  `41 NN` (next, empty = exhausted) per folder.
+- `47 01` (file-count) and `79 00` (memory) encodings not fully understood.
+- IOCTL→wire mapping of DSXUSB.DLL/SYS (0x98ff2004–0x98ff20a4) — internal
+  branch only; the driver no longer needs it.
