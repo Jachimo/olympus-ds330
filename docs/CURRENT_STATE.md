@@ -99,12 +99,19 @@ All details in `docs/DS-330_PROTOCOL.md` §9. Summary:
    info per folder; `info` lists every recording with names and dates
    (live-verified with 3 files across folders A and E). The DSS header
    also carries per-file timestamps, used for naming and file mtimes.
-2. **Folder renaming**: wire frame decoded (`4A <folder> <8-byte
-   name>`) on the feature/rename-folders branch (PR #6).
-3. **`--wav` conversion** shells out to ffmpeg; DSS-SP decode otherwise
+2. **Folder renaming: SOLVED (2026-11-23).** `4A <folder> <8-byte
+   name>` (decoded from the DSXUSB.SYS disassembly, live-verified).
+   `rename -f F --name NAME` renames any folder including A; writing
+   eight spaces clears a name. Also discovered: `47 01` carries folder
+   A's name in the same format as `47 02..05` — it only looked like a
+   status counter while A was unnamed.
+3. **File deletion: SOLVED (2026-11-23).** `A0 <folder> <file WORD
+   x2>`, live-verified including a full sweep of every recording on
+   the device (PR #7).
+4. **`--wav` conversion** shells out to ffmpeg; DSS-SP decode otherwise
    unsupported natively.
-3. **`47 01` semantics** (file-count dword) and `79 00` (memory) encoding
-   are not fully understood; harmless to leave raw.
+5. **`79 00` (memory) encoding** is not fully understood; harmless to
+   leave raw.
 
 ## Session log
 
@@ -130,8 +137,7 @@ All details in `docs/DS-330_PROTOCOL.md` §9. Summary:
 
 - 2026-11-23 (later): Issue #4 (delete after download) solved on branch
   feature/delete-after-download. A0 delete frame live-verified
-  (nonexistent-file delete silently accepted; device wedges briefly
-  after a real delete, reset needed); --delete-after implemented with
+  (nonexistent-file delete silently accepted); --delete-after implemented with
   on-disk byte verification before any delete. Both RANDOM recordings
   used for live testing per owner instruction.
 - 2026-11-23 (continued): Post-delete "wedge" root-caused. A0
@@ -142,4 +148,13 @@ All details in `docs/DS-330_PROTOCOL.md` §9. Summary:
   replug. delete_file now drains the polls instead of resetting.
   Also verified: renaming edge cases (duplicates allowed on device,
   CLI refuses ambiguous matches; overlong names truncated; NUL/space
-  both clear). Full sweep+delete still to be re-run end-to-end.
+  both clear). Full sweep+delete re-run end-to-end: all 4 recordings
+  of a fresh test set downloaded, verified, deleted; device empty;
+  erase window measured up to 30+ s near end-of-folder.
+- 2026-11-23: Issue #3 (folder rename) solved on branch
+  feature/rename-folders. Spike on the private branch decoded wire
+  frames from the DSXUSB.SYS dispatch handlers: `4A <folder> <name>`
+  (rename), `A0 <folder> <file WORD x2>` (delete), `E1` (folder info
+  write), `C0 <folder> <file>` (direct file addressing); the driver's
+  length field explains the 64-byte pages. Rename live-verified on
+  folders A/B/E incl. round-trips and clearing A's name.

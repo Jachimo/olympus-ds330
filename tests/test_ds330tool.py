@@ -348,10 +348,13 @@ def test_resolve_folder_static(spec, expected):
 def test_resolve_folder_by_device_names():
     # folder names are device-specific and user-settable: they must only
     # resolve against the actual device's names, never a hardcoded map
-    names = ["DAYNOTE", "WORK", "IDEAS", "RANDOM"]
+    names = ["", "DAYNOTE", "WORK", "IDEAS", "RANDOM"]
     assert t.resolve_folder("daynote", names=names) == 2
     assert t.resolve_folder("Work", names=names) == 3
     assert t.resolve_folder("RANDOM", names=names) == 5
+    # an unnamed folder (A) cannot be matched by name
+    with pytest.raises(t.DS330Error):
+        t.resolve_folder("main", names=names)
     # a name from a DIFFERENT device's defaults must not resolve
     with pytest.raises(t.DS330Error):
         t.resolve_folder("lecture", names=names)
@@ -369,13 +372,18 @@ def test_ds330_resolve_folder_queries_device():
             return t.ACCEPT_DATA
 
         def bulk_in(self, size=t.PAGE, timeout_ms=None):
-            if self.n == 0:
-                self.n += 1
-                return b"\x00" * 64
-            return b"\x00" * 4 + b"DAYNOTE " + b"\x00" * 56
+            self.n += 1
+            # each folder_names() session reads 7 pages: init,
+            # device-info, then 47 01..05 (folder A is read #3, blank).
+            pos = self.n % 7 or 7
+            if pos == 4:  # folder B's name page (47 02)
+                return b"\x00" * 4 + b"DAYNOTE " + b"\x00" * 56
+            return b"\x00" * 64
 
     dev = t.DS330(usb=FakeUsbNames())
-    assert dev.folder_names()[0] == "DAYNOTE"
+    # only folder B is named DAYNOTE on this fake device; A, C-E unnamed
+    assert dev.folder_names() == ["DAYNOTE", "", "", ""]
+    assert dev.folder_names(include_a=True) == ["", "DAYNOTE", "", "", ""]
     assert dev.resolve_folder("daynote") == 2
 
 
@@ -456,6 +464,7 @@ def test_save_recording_sets_mtime_to_stop(tmp_path):
     assert abs(st.st_atime - stop) < 1
 
 
+# ---------------------------------------------------------------------------
 # ---------------------------------------------------------------------------
 # delete-after-download (issue #4)
 # ---------------------------------------------------------------------------
@@ -552,3 +561,53 @@ def test_delete_after_deletes_on_match(tmp_path, capsys):
     t.delete_after(FakeDev(), 5, 1, out, dss)
     assert FakeDev.deleted == [(5, 1)]
     assert "deleted E01 from device" in capsys.readouterr().out
+
+# folder rename (issue #3)
+# ---------------------------------------------------------------------------
+
+def test_set_folder_name_frame():
+    fake = FakeUsb([(ACCEPT_NO, [])])
+    dev = t.DS330(usb=fake)
+    dev.set_folder_name(2, "DAYNOTE")
+    page = fake.sent[0]
+    assert page[:10] == b"\x4a\x02" + b"DAYNOTE "
+    assert len(page) == 64
+
+
+def test_set_folder_name_validation():
+    fake = FakeUsb([(ACCEPT_NO, [])])
+    dev = t.DS330(usb=fake)
+    for bad in ["", "TOO LONG NAME", "SLOVAKč", "x" * 9]:
+        with pytest.raises(t.DS330Error):
+            dev.set_folder_name(2, bad)
+    assert fake.sent == []  # nothing went to the wire
+
+
+def test_cmd_rename_uses_resolved_folder(monkeypatch, capsys):
+    calls = {}
+
+    class FakeDev:
+        def resolve_folder(self, spec):
+            calls["spec"] = spec
+            return 3
+
+        def folder_names(self, include_a=False):
+            return ["", "DICTATE", "LECTURE", "TO DO", "RANDOM"]
+
+        def set_folder_name(self, folder, name):
+            calls["folder"] = folder
+            calls["name"] = name
+            return name
+
+    args = t.argparse.Namespace(folder="lecture", name="IDEAS")
+    t.cmd_rename(FakeDev(), args)
+    assert calls == {"spec": "lecture", "folder": 3, "name": "IDEAS"}
+    assert "folder C: 'LECTURE' -> 'IDEAS'" in capsys.readouterr().out
+
+
+def test_resolve_folder_duplicate_names_refused():
+    # the device accepts duplicate folder names (verified live); the CLI
+    # must refuse to guess which folder a bare name refers to
+    names = ["DAYNOTE", "DAYNOTE", "LECTURE", "TO DO", "RANDOM"]
+    with pytest.raises(t.DS330Error, match="folders A/B are all named"):
+        t.resolve_folder("daynote", names=names)

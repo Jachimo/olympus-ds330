@@ -383,12 +383,19 @@ SET_TIME = Frame(b"\x90", name="set-time",
 # §9.9 file delete (decoded from DSXUSB.SYS, live-verified 2026-11-23):
 # `A0 <folder 1-5> <file WORD LE> <file WORD LE>` — the two WORDs carry
 # the same 1-based file index (the device's duplicated-data pattern).
-# A delete of a nonexistent file is silently accepted. The device wedges
-# briefly after a successful delete and needs a reset before the next
-# operation (observed live).
+# A delete of a nonexistent file is silently accepted. A flash-erase
+# window follows every delete; see §9.9 and delete_file().
 DELETE_FILE = Frame(b"\xA0", name="delete-file",
                     suffix=lambda p: bytes([p["folder"]])
                     + p["file_index"].to_bytes(2, "little") * 2)
+
+# §9.8 folder rename (decoded from DSXUSB.SYS, confirmed live 2026-11-23):
+# `4A <folder 1-5> <8-byte ASCII name>`. Folder A is nameable too; its
+# name is carried by 47 01 (live-verified: reads like a bare counter
+# only while A is unnamed). Folders B-E round-trip verified live.
+SET_FOLDER_NAME = Frame(b"\x4A", name="set-folder-name",
+                        suffix=lambda p: bytes([p["folder"]])
+                        + p["name"].encode("ascii")[:8].ljust(8))
 
 # §9.7: single-frame queries used by `info`
 LABEL_QUERY = Frame(b"\x95\x00", pages=1, name="label")
@@ -412,6 +419,12 @@ def download_sequence() -> Sequence:
 # ---------------------------------------------------------------------------
 # Executor: one generic runner for every sequence
 # ---------------------------------------------------------------------------
+
+def _folder_name(page: bytes) -> str:
+    """Folder-name field from a 47 NN page: bytes 4..12, ASCII, with
+    space/NUL/0xFF fill stripped (an unnamed folder reads as "")."""
+    return page[4:12].decode("ascii", "replace").strip(" \x00\xff")
+
 
 class DS330:
     """The DS-330 protocol on top of the Usb transport.
@@ -510,16 +523,22 @@ class DS330:
 
     # -- high-level operations (each = documented sequences) ----------------
 
-    def folder_names(self):
-        """The device's user-set folder names for folders B-E (47 02..05).
-        Folder A's query (47 01) returns status, not a name. Names are
-        device-specific and user-configurable — never assume defaults."""
+    def folder_names(self, include_a=False):
+        """The device's user-set folder names.
+
+        `47 02..05` return folders B-E. `47 01` (folder A) returns a
+        dword + A's name — it looks like a bare status counter only when
+        A is unnamed (established live 2026-11-23: after naming A, the
+        name appears in the 47 01 page). Names are device-specific and
+        user-configurable — never assume defaults.
+        """
         r = self.run_sequence([INIT, DEVICE_INFO, *FOLDER_SCAN])
+        pages = [r.get(f.key(), b"") for f in FOLDER_SCAN]
         names = []
-        for f in FOLDER_SCAN[1:]:
-            page = r.get(f.key(), b"")
-            names.append(page[4:12].decode("ascii", "replace").strip()
-                         if len(page) >= 12 else "")
+        if include_a and len(pages[0]) >= 12:
+            names.append(_folder_name(pages[0]))
+        for p in pages[1:]:
+            names.append(_folder_name(p) if len(p) >= 12 else "")
         return names
 
     def resolve_folder(self, spec):
@@ -529,7 +548,10 @@ class DS330:
         except DS330Error:
             if str(spec).strip().isdigit() or len(str(spec).strip()) == 1:
                 raise
-            return resolve_folder(spec, names=self.folder_names())
+            # all five names; unnamed folders ("") can't be matched by
+            # name — letters/numbers still work for those
+            return resolve_folder(spec,
+                                  names=self.folder_names(include_a=True))
 
     def enumerate_files(self, folder: int, notify=None) -> list:
         """§9.3: the complete file table of one folder.
@@ -570,8 +592,9 @@ class DS330:
         say("connecting and initializing device ...")
         r = self.run_sequence(info_sequence())
         say("scanning folder names ...")
-        folders = [p[4:12].decode("ascii", "replace").strip()
-                   for f in FOLDER_SCAN[1:] if len(p := r.get(f.key(), b"")) >= 12]
+        folders = [_folder_name(r.get(f.key(), b""))
+                   for f in FOLDER_SCAN
+                   if len(r.get(f.key(), b"")) >= 12]
         file_table = {}
         for folder in range(1, 6):
             letter = chr(ord("A") + folder - 1)
@@ -583,7 +606,7 @@ class DS330:
         return {
             "device": ascii_stripped(r.get(DEVICE_INFO.key())),
             "label": label,
-            "folders": [f for f in folders if f],
+            "folders": folders,  # [A..E]; empty string = unnamed
             "memory": memory,
             "file_table": file_table,
         }
@@ -648,6 +671,20 @@ class DS330:
             f"device still busy {ERASE_TIMEOUT_S}s after deleting "
             f"{chr(ord('A') + folder - 1)}{file_index:02d} (flash erase "
             "did not finish) -- do NOT reset; wait or replug")
+
+    def set_folder_name(self, folder: int, name: str) -> str:
+        """§9.8: `4A <folder> <8-byte ASCII name>` (live-verified).
+
+        Names are 8 characters max (space-padded on the wire, exactly as
+        the Windows software stores them). Returns the name as stored.
+        """
+        name = " ".join(name.split())  # collapse interior whitespace
+        if len(name) > 8 or not name:
+            raise DS330Error(f"folder name must be 1-8 chars: {name!r}")
+        if not all(32 <= ord(c) < 127 for c in name):
+            raise DS330Error(f"folder name must be plain ASCII: {name!r}")
+        self.run_sequence([SET_FOLDER_NAME], folder=folder, name=name)
+        return name
 
     def set_time(self, when: Optional[datetime.datetime] = None
                  ) -> datetime.datetime:
@@ -780,15 +817,15 @@ def cmd_info(dev, args):
     i = dev.info(notify=notify)
     print(f"device : {i['device']}")
     print(f"label  : {i['label']}")
-    print(f"folders: A, " + ", ".join(
-        f"{chr(ord('A') + n)}='{name}'"
-        for n, name in enumerate(i['folders'], start=1)))
+    print(f"folders: " + ", ".join(
+        f"{chr(ord('A') + n)}='{name}'" if name else chr(ord('A') + n)
+        for n, name in enumerate(i['folders'])))
     if i["memory"] is not None:
         print(f"memory : {i['memory']:,}")
     total = 0
     for folder in range(1, 6):
         letter = chr(ord("A") + folder - 1)
-        name = i["folders"][folder - 2] if folder >= 2 else ""
+        name = i["folders"][folder - 1] if i["folders"] else ""
         files = i["file_table"].get(folder, [])
         for index, fi in enumerate(files, start=1):
             if not fi:
@@ -807,9 +844,10 @@ def cmd_info(dev, args):
 def resolve_folder(spec, names=None):
     """Folder spec -> 1-5. Accepts a number or a letter A-E always;
     folder NAMES are device-specific (user-settable, read via the
-    47 02..05 queries) and are only resolved when `names` supplies the
-    current device's actual names — as a list where names[0] is folder
-    B, ..., names[3] is folder E. Never hardcode name->folder mappings.
+    47 01..05 queries) and are only resolved when `names` supplies the
+    current device's actual names — as a 5-element list (names[0] =
+    folder A, ..., names[4] = folder E; unnamed folders read as "").
+    Never hardcode name->folder mappings.
     """
     s = str(spec).strip().lower()
     if s in {"a": 1, "b": 2, "c": 3, "d": 4, "e": 5}:
@@ -817,14 +855,23 @@ def resolve_folder(spec, names=None):
     if s.isdigit() and 1 <= int(s) <= 5:
         return int(s)
     if names:
-        for i, name in enumerate(names):
-            if name and name.strip().lower() == s:
-                return i + 2  # names[0] is folder B
+        matches = [i + 1 for i, n in enumerate(names[:5])
+                   if n and n.strip().lower() == s]
+        if len(matches) == 1:
+            return matches[0]
+        if len(matches) > 1:
+            # the device happily stores duplicate names (verified live);
+            # refuse to guess which one the user means
+            letters = "/".join(chr(ord("A") + m - 1) for m in matches)
+            raise DS330Error(
+                f"folders {letters} are all named {spec!r} on this device "
+                "-- select one by letter or number instead")
         raise DS330Error(
             f"no folder named {spec!r} on this device. Folders: "
-            + ", ".join(f"{chr(ord('A') + i + 1)}='{n}'" for i, n in enumerate(names)))
-    raise DS330Error(f"bad folder {spec!r}: use 1-5 or A-E"
-                    + ("" if names is None else ""))
+            + ", ".join(f"{chr(ord('A') + i)}='{n}' or (unnamed)" if n
+                        else f"{chr(ord('A') + i)} (unnamed)"
+                        for i, n in enumerate(names[:5])))
+    raise DS330Error(f"bad folder {spec!r}: use 1-5 or A-E")
 
 
 def parse_dss_header(dss: bytes) -> Optional[dict]:
@@ -981,6 +1028,14 @@ def cmd_download(dev, args):
     return cmd_download_one(dev, args)
 
 
+def cmd_rename(dev, args):
+    folder = dev.resolve_folder(args.folder)
+    letter = chr(ord("A") + folder - 1)
+    current = dev.folder_names(include_a=True)[folder - 1]
+    new = dev.set_folder_name(folder, args.name)
+    print(f"folder {letter}: {current or '(unnamed)'!r} -> {new!r}")
+
+
 def cmd_reset(dev, args):
     dev.reset()
     print("device reset")
@@ -1024,6 +1079,12 @@ def main(argv=None):
                    help="set the clock to UTC instead of the local "
                         "timezone (with --time: interpret the digits as UTC)")
 
+    rn = sub.add_parser("rename", help="rename a device folder")
+    rn.add_argument("--folder", "-f", metavar="FOLDER", required=True,
+                    help="folder to rename: 1-5, A-E, or its current name")
+    rn.add_argument("--name", metavar="NAME", required=True,
+                    help="new name (1-8 ASCII characters)")
+
     sub.add_parser("reset", help="reset the device (recovery without replug)")
 
     args = p.parse_args(argv)
@@ -1055,6 +1116,8 @@ def main(argv=None):
                     elif args.command == "settime":
                         t = dev.set_time(when)
                         print(f"recorder clock set to {t:%Y-%m-%d %H:%M:%S}")
+                    elif args.command == "rename":
+                        cmd_rename(dev, args)
                     return 0
                 except (TimeoutError, UsbError) as e:
                     if attempt == 2:

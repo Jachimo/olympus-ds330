@@ -24,6 +24,8 @@ Corrections and further technical information are always appreciated.
   verified byte-identical on disk (opt-in, never the default).
   Folder names are
   read live from the recorder (they are user-settable, per device)
+- `rename` — rename a device folder (1–8 characters; the recorder's
+  folder labels are user-settable, e.g. `rename -f E --name RANDOM`)
 - `settime` — set the recorder's clock from the computer clock
 - `reset` — recover a wedged device without unplugging
 
