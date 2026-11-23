@@ -16,7 +16,11 @@ Corrections and further technical information are always appreciated.
 
 - `info` — device identity, folders, file table, recording dates
 - `download` — download recordings as `.dss` (byte-identical to what the
-  Windows player produces), optionally converting to `.wav` via ffmpeg
+  Windows player produces), optionally converting to `.wav` via ffmpeg.
+  With no options it downloads every recording from every folder, naming
+  files by folder and record-start timestamp (`E01_20261123-005622.dss`)
+  and preserving the record time in the file's mtime. Folder names are
+  read live from the recorder (they are user-settable, per device)
 - `settime` — set the recorder's clock from the computer clock
 - `reset` — recover a wedged device without unplugging
 
@@ -48,8 +52,8 @@ Corrections and further technical information are always appreciated.
 
 ```sh
 python3 src/ds330tool.py info                  # device, folders, file table
-python3 src/ds330tool.py download              # first recording, folder A
-python3 src/ds330tool.py download -f E -i 2 --wav  # RANDOM folder, file 2, convert
+python3 src/ds330tool.py download              # every recording, all folders
+python3 src/ds330tool.py download -f E -i 2 --wav  # one recording (folder E, file 2), convert
 python3 src/ds330tool.py settime               # sync recorder clock to PC
 python3 src/ds330tool.py reset                 # recover wedged device
 ```

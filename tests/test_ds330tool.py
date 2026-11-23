@@ -340,27 +340,79 @@ def test_usb_error_hierarchy():
 
 @pytest.mark.parametrize("spec,expected", [
     ("1", 1), ("5", 5), ("a", 1), ("E", 5), ("A", 1),
-    ("random", 5), ("RANDOM", 5), ("dictate", 2), ("lecture", 3),
-    ("to do", 4), ("todo", 4), ("TODO", 4),
 ])
-def test_resolve_folder(spec, expected):
+def test_resolve_folder_static(spec, expected):
     assert t.resolve_folder(spec) == expected
 
 
-@pytest.mark.parametrize("bad", ["0", "6", "f", "music", "", "a1"])
+def test_resolve_folder_by_device_names():
+    # folder names are device-specific and user-settable: they must only
+    # resolve against the actual device's names, never a hardcoded map
+    names = ["DAYNOTE", "WORK", "IDEAS", "RANDOM"]
+    assert t.resolve_folder("daynote", names=names) == 2
+    assert t.resolve_folder("Work", names=names) == 3
+    assert t.resolve_folder("RANDOM", names=names) == 5
+    # a name from a DIFFERENT device's defaults must not resolve
+    with pytest.raises(t.DS330Error):
+        t.resolve_folder("lecture", names=names)
+
+
+def test_ds330_resolve_folder_queries_device():
+    class FakeUsbNames:
+        def __init__(self):
+            self.n = 0
+
+        def bulk_out(self, data, timeout_ms=None):
+            pass
+
+        def interrupt_in(self, timeout_ms=None):
+            return t.ACCEPT_DATA
+
+        def bulk_in(self, size=t.PAGE, timeout_ms=None):
+            if self.n == 0:
+                self.n += 1
+                return b"\x00" * 64
+            return b"\x00" * 4 + b"DAYNOTE " + b"\x00" * 56
+
+    dev = t.DS330(usb=FakeUsbNames())
+    assert dev.folder_names()[0] == "DAYNOTE"
+    assert dev.resolve_folder("daynote") == 2
+
+
+@pytest.mark.parametrize("bad", ["0", "6", "f", "music", "", "a1", "random"])
 def test_resolve_folder_rejects(bad):
     with pytest.raises(t.DS330Error):
         t.resolve_folder(bad)
+
+
+def test_recording_name_from_header():
+    dss = bytearray(b"\x00" * 1024)
+    dss[38:50] = b"261123005622"
+    assert t.recording_name(bytes(dss), "fallback") == "20261123-005622"
+
+
+def test_recording_name_fallback_on_garbage():
+    assert t.recording_name(b"\x00" * 1024, "A01") == "A01"
 
 
 # ---------------------------------------------------------------------------
 # download-all sweep (default `download` behavior)
 # ---------------------------------------------------------------------------
 
+def _fake_stream(start_digits: str) -> bytes:
+    """Minimal extractable stream whose DSS header carries a start stamp.
+    The 2-byte stream preamble is stripped by extract_dss, so DSS offset
+    N maps to stream offset N+2."""
+    stream = bytearray(b"\x00" * (2 + 512 + 64 + 512))
+    stream[40:52] = start_digits.encode("ascii")
+    return bytes(stream)
+
+
 def test_cmd_download_all_sweeps_folders(tmp_path, monkeypatch, capsys):
     # folder 1 -> one file; folder 2 -> none; folder 5 -> two files
-    streams = {(1, 1): b"x" * 700, (2, 1): b"", (3, 1): b"",
-               (4, 1): b"", (5, 1): b"y" * 700, (5, 2): b"z" * 700}
+    streams = {(1, 1): _fake_stream("261123005622"), (2, 1): b"", (3, 1): b"",
+               (4, 1): b"", (5, 1): _fake_stream("261123011225"),
+               (5, 2): _fake_stream("261122093000")}
 
     class FakeDev:
         def download_raw(self, folder=1, file_index=1, progress=None):
@@ -372,7 +424,8 @@ def test_cmd_download_all_sweeps_folders(tmp_path, monkeypatch, capsys):
     t.cmd_download_all(FakeDev(), args)
     out = capsys.readouterr().out
     assert "downloaded 3 recording(s)" in out
-    for name in ("A01.dss", "E01.dss", "E02.dss"):
+    for name in ("A01_20261123-005622.dss", "E01_20261123-011225.dss",
+                 "E02_20261122-093000.dss"):
         assert (tmp_path / name).exists(), name
 
 
@@ -386,3 +439,18 @@ def test_cmd_download_all_empty_device(tmp_path, monkeypatch):
     monkeypatch.chdir(tmp_path)
     with pytest.raises(t.ProtocolRejected):
         t.cmd_download_all(FakeDev(), args)
+
+
+def test_save_recording_sets_mtime_to_stop(tmp_path):
+    stream = _fake_stream("261123005622")
+    # stop stamp lives at DSS offset 50 -> stream offset 52
+    stream = bytearray(stream)
+    stream[52:64] = b"261123005701"
+    args = t.argparse.Namespace(raw=None, wav=None, verbose=False)
+    out = str(tmp_path / "x.dss")
+    t.save_recording(bytes(stream), None, out, args)
+    import os
+    st = os.stat(out)
+    stop = datetime.datetime(2026, 11, 23, 0, 57, 1).timestamp()
+    assert abs(st.st_mtime - stop) < 1
+    assert abs(st.st_atime - stop) < 1

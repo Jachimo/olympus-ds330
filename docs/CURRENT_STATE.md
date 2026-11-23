@@ -88,11 +88,16 @@ All details in `docs/DS-330_PROTOCOL.md` §9. Summary:
 1. **Multiple files: SOLVED (2026-11-22).** The open-file frame is
    `18 <folder> <file>` — folders 1–5 = device A–E, both selector bytes
    required. `download --folder F -i N` reads any folder (number,
-   letter, or name). Verified live with recordings in folders A and E
-   (RANDOM): all download and decode via ffmpeg. The `40 01` file-info
-   object still reflects only one file; per-file info beyond that object
-   is unknown.
-2. **`--wav` conversion** shells out to ffmpeg; DSS-SP decode otherwise
+   letter, or this device's name — names are user-settable per recorder
+   and are read live via the 47 02..05 queries, never hardcoded).
+   Plain `download` sweeps all folders. Verified live with recordings
+   in folders A and E: all download and decode via ffmpeg. The `40 01`
+   file-info object still reflects only one file; per-file info beyond
+   that object is unknown (the DSS header itself carries per-file
+   timestamps, which the tool uses for naming and file mtimes).
+2. **Folder renaming** (the Windows software can set folder names) is
+   NOT yet decoded — a future feature.
+3. **`--wav` conversion** shells out to ffmpeg; DSS-SP decode otherwise
    unsupported natively.
 3. **`47 01` semantics** (file-count dword) and `79 00` (memory) encoding
    are not fully understood; harmless to leave raw.

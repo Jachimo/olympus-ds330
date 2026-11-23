@@ -205,7 +205,10 @@ likely a size/type field.
 - `47 01` → 41 zeros (folder 0? or GetFileNum return=0)
 - Format: 4 zero bytes (likely count/index) + 8-byte ASCII name + zero pad
 - This maps to DSXGetFolderName/SetFolderName in the DSX API.
-- The recorder has default folders DICTATE/LECTURE/TO DO/RANDOM.
+- The recorder's folder names are USER-SETTABLE per device (the
+  Windows software can rename them); DICTATE/LECTURE/TO DO/RANDOM are
+  this device's values, not constants. Always read names via
+  `47 02..05`; never hardcode name->folder mappings in tooling.
 - `47 06` and higher: untested, could return more folders or file counts.
 
 ### Updated 0x47 mapping
@@ -335,12 +338,14 @@ between info and open.
 `18 01` (two bytes) is rejected.
 
 Folder model (established live, 2026-11-22): folders 1–5 = A–E.
-`47 02..05` return the names of folders B–E (DICTATE/LECTURE/TO DO/
-RANDOM); `47 01` is folder A's query (status/zeros — A is unnamed).
+`47 02..05` return the names of folders B–E (names are user-settable per
+device — DICTATE/LECTURE/TO DO/RANDOM are this device's values);
+`47 01` is folder A's query (status/zeros — no name readable for A).
+Setting folder names is NOT yet decoded (the Windows software can do it).
 An `18 <folder> <file>` pointing at a nonexistent file yields an empty
 data stream (no error). Verified with recordings in A and E:
 `18 05 01`/`18 05 02` download both RANDOM-folder files, `18 02 01`
-(LECTURE, empty folder) returns an empty stream.
+(empty folder) returns an empty stream.
 
 ### 9.5 Data-phase stream layout (verified byte-for-byte)
 The `80 00` data stream is NOT the same layout as the old probe-era

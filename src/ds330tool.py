@@ -482,6 +482,27 @@ class DS330:
 
     # -- high-level operations (each = documented sequences) ----------------
 
+    def folder_names(self):
+        """The device's user-set folder names for folders B-E (47 02..05).
+        Folder A's query (47 01) returns status, not a name. Names are
+        device-specific and user-configurable — never assume defaults."""
+        r = self.run_sequence([INIT, DEVICE_INFO, *FOLDER_SCAN])
+        names = []
+        for f in FOLDER_SCAN[1:]:
+            page = r.get(f.key(), b"")
+            names.append(page[4:12].decode("ascii", "replace").strip()
+                         if len(page) >= 12 else "")
+        return names
+
+    def resolve_folder(self, spec):
+        """Resolve a CLI folder spec against THIS device's folder names."""
+        try:
+            return resolve_folder(spec)
+        except DS330Error:
+            if str(spec).strip().isdigit() or len(str(spec).strip()) == 1:
+                raise
+            return resolve_folder(spec, names=self.folder_names())
+
     def info(self) -> dict:
         """Device identity, label, folders, memory, file table.
 
@@ -673,27 +694,75 @@ def cmd_info(dev, args):
         print(f"dates  : {fi['date_digits']!r} (unparsed)")
 
 
-FOLDER_NAMES = {"a": 1, "b": 2, "c": 3, "d": 4, "e": 5,
-                "dictate": 2, "lecture": 3, "to do": 4, "todo": 4,
-                "random": 5}
-
-
-def resolve_folder(spec: str) -> int:
-    """Folder spec -> 1-5. Accepts a number, a letter A-E, or a folder
-    name (DICTATE/LECTURE/TO DO/RANDOM) as shown by `info`."""
+def resolve_folder(spec, names=None):
+    """Folder spec -> 1-5. Accepts a number or a letter A-E always;
+    folder NAMES are device-specific (user-settable, read via the
+    47 02..05 queries) and are only resolved when `names` supplies the
+    current device's actual names — as a list where names[0] is folder
+    B, ..., names[3] is folder E. Never hardcode name->folder mappings.
+    """
     s = str(spec).strip().lower()
-    if s in FOLDER_NAMES:
-        return FOLDER_NAMES[s]
+    if s in {"a": 1, "b": 2, "c": 3, "d": 4, "e": 5}:
+        return {"a": 1, "b": 2, "c": 3, "d": 4, "e": 5}[s]
     if s.isdigit() and 1 <= int(s) <= 5:
         return int(s)
-    raise DS330Error(f"bad folder {spec!r}: use 1-5, A-E, or a folder name "
-                    "(DICTATE/LECTURE/TO DO/RANDOM)")
+    if names:
+        for i, name in enumerate(names):
+            if name and name.strip().lower() == s:
+                return i + 2  # names[0] is folder B
+        raise DS330Error(
+            f"no folder named {spec!r} on this device. Folders: "
+            + ", ".join(f"{chr(ord('A') + i + 1)}='{n}'" for i, n in enumerate(names)))
+    raise DS330Error(f"bad folder {spec!r}: use 1-5 or A-E"
+                    + ("" if names is None else ""))
+
+
+def parse_dss_header(dss: bytes) -> Optional[dict]:
+    """Per-file metadata from the DSS file header itself.
+
+    Offsets (per the DSS format; same stamps as the file-info object):
+      [38:50]  record start, YYMMDDHHMMSS ASCII
+      [50:62]  record stop,  YYMMDDHHMMSS ASCII
+      [62:68]  duration,      HHMMSS ASCII
+    Used for output naming: the device's 8-char file names are only
+    readable for the first file via the `40 01` object, but every
+    downloaded DSS carries its own timestamps.
+    """
+    try:
+        start = datetime.datetime.strptime(dss[38:50].decode("ascii"),
+                                           "%y%m%d%H%M%S")
+    except ValueError:
+        return None
+    try:
+        stop = datetime.datetime.strptime(dss[50:62].decode("ascii"),
+                                          "%y%m%d%H%M%S")
+    except ValueError:
+        stop = start
+    return {"start": start, "stop": stop}
+
+
+def recording_name(dss: bytes, fallback: str) -> str:
+    """Base name for a downloaded recording: <YYYYMMDD-HHMMSS> from the
+    DSS header (folder/timestamp naming), or the fallback if the header
+    does not parse."""
+    header = parse_dss_header(dss)
+    if header:
+        return header["start"].strftime("%Y%m%d-%H%M%S")
+    return fallback
 
 
 def save_recording(stream, fi, out, args):
     dss = extract_dss(stream)
     with open(out, "wb") as f:
         f.write(dss)
+    # Filesystem timestamps from the recording itself (rsync-style
+    # preservation): mtime = when the recording finished (stop), the
+    # moment the file's content was complete on the device. atime
+    # follows. ctime cannot be set on Linux (kernel-managed).
+    header = parse_dss_header(dss)
+    if header:
+        ts = header["stop"].timestamp()
+        os.utime(out, (ts, ts))
     print(f"wrote {len(dss)} bytes -> {out}")
     if args.raw:
         with open(os.path.expanduser(args.raw), "wb") as f:
@@ -710,16 +779,20 @@ def cmd_download_one(dev, args):
     def progress(total, dt):
         print(f"  {total:8d} bytes ({dt:5.1f}s)", file=sys.stderr)
     print("downloading raw stream ...", file=sys.stderr)
+    folder = dev.resolve_folder(args.folder)
     fi, stream = dev.download_raw(
-        folder=resolve_folder(args.folder),
+        folder=folder,
         file_index=args.index,
         progress=progress if args.verbose else None)
     print(f"raw stream: {len(stream)} bytes", file=sys.stderr)
     if not stream:
         raise ProtocolRejected("device returned no data -- "
                                "no recording in that folder at that index?")
-    name = (fi or {}).get("name") or "recording"
-    out = os.path.expanduser(args.out or f"{name.lower()}.dss")
+    letter = chr(ord("A") + folder - 1)
+    fallback = (fi or {}).get("name") or f"{letter}{args.index:02d}"
+    out = os.path.expanduser(args.out
+                                or f"{letter}{args.index:02d}_"
+                                   f"{recording_name(extract_dss(stream), fallback)}.dss")
     return save_recording(stream, fi, out, args)
 
 
@@ -728,7 +801,8 @@ def cmd_download_all(dev, args):
     folder. There is no directory-listing command, so files are found by
     probing `18 <folder> <file>`: an empty data stream cleanly signals
     the end of a folder's file list (established live). Output files are
-    named <letter><NN>.dss (A01.dss, E02.dss, ...).
+    named <letter><NN>_<YYYYMMDD-HHMMSS>.dss from the DSS header's
+    record-start timestamp, e.g. E01_20261123-005622.dss.
     """
     total = 0
     for folder in range(1, 6):
@@ -746,9 +820,10 @@ def cmd_download_all(dev, args):
                 if index == 1:
                     print(f"folder {letter}: (empty)")
                 break
+            name = recording_name(extract_dss(stream), f"{letter}{index:02d}")
             out = os.path.expanduser(
                 args.out if (args.out and folder == 1 and index == 1)
-                else f"{letter}{index:02d}.dss")
+                else f"{letter}{index:02d}_{name}.dss")
             save_recording(stream, fi, out, args)
             total += 1
             index += 1
@@ -784,8 +859,9 @@ def main(argv=None):
     d = sub.add_parser("download", help="download .dss recordings (default: "
                                          "all recordings from all folders)")
     d.add_argument("--folder", "-f", metavar="FOLDER", default=None,
-                   help="device folder to read from: 1-5, A-E, or name "
-                        "(DICTATE/LECTURE/TO DO/RANDOM). Default with no "
+                   help="device folder to read from: 1-5, A-E, or this "
+                        "device's folder name (see 'info'; names are "
+                        "user-settable per recorder). Default with no "
                         "options: sweep every folder")
     d.add_argument("--index", "-i", metavar="N", type=int, default=None,
                    help="file number within the folder, 1-based. Default "
