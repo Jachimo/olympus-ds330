@@ -431,13 +431,25 @@ e.g. captured frame `90 32 36 31 31 32 32 30 32 31 32 31 37` =
 A0 <folder 1-5> <file WORD LE> <file WORD LE>
 ```
 - 6-byte frame; the two WORDs carry the same 1-based file index (the
-  device's duplicated-data pattern). Accepted with no data stage.
+  device's duplicated-data pattern). Accepted with no data stage
+  (`ff 01 00 00 01 ..` status variant).
 - Deleting a nonexistent file is silently accepted (no error).
-- **The device wedges briefly after a successful delete** (observed
-  live): the next frame times out until a reset — reset+re-open right
-  after deleting.
-- Verified live: deleting RANDOM's file 2 then file 1; the file table
-  re-enumerates correctly and remaining files still download.
+- **Post-delete erase window (established live, 2026-11-23):** the
+  flash erase triggered by a delete takes several seconds. During it
+  the interrupt endpoint emits a CONTINUOUS STREAM of "idle/ready"
+  polls (`00 00 00 00 01 ..`, one every ~1.5 s) until the erase
+  finishes. Commands sent during the window are not answered. The
+  correct recovery is to drain the polls until they stop (or a real
+  `06`/reject status appears) — then the device takes commands
+  immediately. **Never `libusb_reset_device()` during the window:**
+  a reset mid-erase leaves the device in a state only a physical
+  replug recovers. (The Windows DLL's 3 s `0xbb8` timeout on delete
+  matches this erase window.) An earlier revision of the Linux tool
+  auto-reset right after deletes; the "post-delete wedge" was that
+  reset, not the delete itself.
+- Verified live: deleting RANDOM's file 2 then file 1, then all three
+  folder-A recordings (the last one deleting the ONLY file on the
+  device); the file table re-enumerates correctly after each.
 
 ### 9.7 Session management notes (live-tested)
 - The device rejects `18 <folder> <file>` (file open) unless the §9.1+§9.2

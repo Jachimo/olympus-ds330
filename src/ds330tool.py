@@ -610,12 +610,24 @@ class DS330:
     def delete_file(self, folder: int, file_index: int):
         """§9.9: `A0 <folder> <file WORD x2>` (live-verified).
 
-        Deletes the file from the device. The device reliably wedges
-        right after a successful delete (observed live: the next frame
-        times out), so this resets and re-opens before returning.
+        Deleting triggers a flash erase that takes a few seconds, during
+        which the device answers the interrupt endpoint with a stream
+        of "idle" ready polls (00 00 00 00 01 ..). We drain those until
+        they stop, so the next command can go out immediately. Do NOT
+        reset the device during this window -- a reset mid-erase leaves
+        it in a state only a physical replug recovers (established
+        live; the original implementation's automatic reset was the
+        real cause of the observed "post-delete wedge").
         """
         self.run_sequence([DELETE_FILE], folder=folder, file_index=file_index)
-        self.reset()
+        # drain the ready-poll stream until the erase completes
+        while True:
+            try:
+                status = self.usb.interrupt_in(timeout_ms=1500)
+            except TimeoutError:
+                return  # polls stopped: erase finished, device ready
+            if status[:1] == b"\x06" or status[:4] == STATUS_REJECT_PREFIX:
+                return  # a real answer, not a poll; device is ready
 
     def set_time(self, when: Optional[datetime.datetime] = None
                  ) -> datetime.datetime:

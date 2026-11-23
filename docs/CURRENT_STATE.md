@@ -134,3 +134,12 @@ All details in `docs/DS-330_PROTOCOL.md` §9. Summary:
   after a real delete, reset needed); --delete-after implemented with
   on-disk byte verification before any delete. Both RANDOM recordings
   used for live testing per owner instruction.
+- 2026-11-23 (continued): Post-delete "wedge" root-caused. A0
+  triggers a multi-second flash erase; the device answers the
+  interrupt endpoint with continuous idle polls (00..01) until the
+  erase finishes, and ignores commands meanwhile. The wedge was OUR
+  libusb_reset_device fired mid-erase — that state needs a physical
+  replug. delete_file now drains the polls instead of resetting.
+  Also verified: renaming edge cases (duplicates allowed on device,
+  CLI refuses ambiguous matches; overlong names truncated; NUL/space
+  both clear). Full sweep+delete still to be re-run end-to-end.

@@ -56,8 +56,9 @@ protocol is proprietary and was fully reverse-engineered (see docs/).
 - Multi-file download: `18 <folder> <file>` verified with files in two
   folders. The full file table is enumerable via `40 NN` (first) /
   `41 NN` (next, empty = exhausted) per folder.
-- File delete is `A0 <folder> <file WORD x2>` (§9.9); the device
-  wedges briefly after a real delete — reset before the next op.
+- File delete is `A0 <folder> <file WORD x2>` (§9.9); a flash-erase
+  window follows (ready polls on the interrupt endpoint). Drain the
+  polls; NEVER reset mid-erase (that causes the replug-only wedge).
 - `47 01` (file-count) and `79 00` (memory) encodings not fully understood.
 - IOCTL→wire mapping of DSXUSB.DLL/SYS (0x98ff2004–0x98ff20a4) — internal
   branch only; the driver no longer needs it.

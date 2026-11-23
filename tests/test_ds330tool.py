@@ -461,14 +461,23 @@ def test_save_recording_sets_mtime_to_stop(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_delete_file_frame():
-    fake = FakeUsb([(ACCEPT_NO, [])])
+    # delete_file drains the post-delete ready-poll stream; give the
+    # fake a script where the poll is followed by silence (timeout)
+    class PollThenSilent(FakeUsb):
+        def interrupt_in(self, timeout_ms=None):
+            if not self.polled:
+                self.polled = True
+                return self._status
+            raise TimeoutError("poll stream ended")
+
+    fake = PollThenSilent([(ACCEPT_NO, [])])
+    fake.polled = False
     dev = t.DS330(usb=fake)
-    # delete_file resets afterwards; stub the reset
-    dev.reset = lambda: None
     dev.delete_file(5, 2)
     page = fake.sent[0]
     assert page[:6] == b"\xa0\x05" + b"\x02\x00" * 2
     assert len(page) == 64
+    assert fake.polled  # the drain loop actually ran
 
 
 def test_delete_after_only_on_verified_write(tmp_path, capsys):
