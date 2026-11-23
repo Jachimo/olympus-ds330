@@ -213,8 +213,8 @@ are kept for history:
 | GetFileInfoNext | `41 NN` (next file; empty = exhausted) | confirmed |
 | OpenFile/ReadFile | `18 <folder> <file>` + `80 00` data phase | confirmed |
 | SetPCTime | `90` + YYMMDDHHMMSS ASCII | confirmed |
-| DeleteFile | ? | none |
-| SetFolderName | ? | none — future work |
+| DeleteFile | `A0 <folder> <file WORD x2>` (decoded from DSXUSB.SYS, not yet live-verified) | decoded |
+| SetFolderName | `4A <folder> <name>` (§9.8) | confirmed |
 
 ### 0x47 — new discoveries (2026-11-20; numbering corrected 2026-11-22)
 - `47 01` → 41 bytes: dword 1 + zeros (counter/status, previously known)
@@ -425,6 +425,34 @@ full player-session captures with their 393-byte preamble.
 ```
 e.g. captured frame `90 32 36 31 31 32 32 30 32 31 32 31 37` =
 `0x90` + `"261122021217"` = 2026-11-22 02:12:17. Response: accepted status.
+
+### 9.8 Folder rename (decoded 2026-11-23 from DSXUSB.SYS, live-verified)
+```
+4A <folder 1-5> <8-byte ASCII name, space-padded>
+```
+- 10-byte frame (zero-padded to the 64-byte page like all commands);
+  accepted with no data stage. Names are 1-8 plain-ASCII characters.
+- Verified live: rename B and E, round-trip by letter and by the device's
+  current name; `47 NN` reads back the new name immediately.
+- Edge cases (live-verified 2026-11-23):
+  - duplicate names across folders are ACCEPTED by the device (no
+    uniqueness constraint); the CLI refuses to resolve an ambiguous
+    bare name and asks for a letter/number
+  - a no-op rename (same name) is accepted, name unchanged
+  - the device stores arbitrary bytes verbatim: a 0xFF byte and 0x00
+    bytes inside the 8-byte field round-trip exactly (the CLI's
+    plain-ASCII validation prevents sending these)
+  - writing 8x 0x00 clears the name, exactly like 8 spaces
+  - names longer than 8 bytes are TRUNCATED to the first 8 by the
+    device (the CLI rejects >8 before the wire)
+- **Folder A is nameable too** (live-verified): after naming A, `47 01`
+  returns `dword + "MAIN"` — the same format as `47 02..05`. It only
+  looked like a bare status counter before because A was unnamed. Writing
+  eight spaces clears the name.
+- Related driver findings (DSXUSB.SYS disassembly, not yet needed on the
+  wire): `E1 <folder> <14 bytes>` = SetFolderInfo (superset of the rename),
+  `C0 <folder> <file>` = direct file-info addressing, and the driver's
+  frame-length field rounds up to 64-byte pages.
 
 ### 9.7 Session management notes (live-tested)
 - The device rejects `18 <folder> <file>` (file open) unless the §9.1+§9.2

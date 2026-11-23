@@ -21,6 +21,8 @@ Corrections and further technical information are always appreciated.
   files by folder and record-start timestamp (`E01_20261123T005622.dss`)
   and preserving the record time in the file's mtime. Folder names are
   read live from the recorder (they are user-settable, per device)
+- `rename` — rename a device folder (1–8 characters; the recorder's
+  folder labels are user-settable, e.g. `rename -f E --name RANDOM`)
 - `settime` — set the recorder's clock from the computer clock
 - `reset` — recover a wedged device without unplugging
 
