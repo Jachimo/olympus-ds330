@@ -43,6 +43,9 @@ PAGE = 64
 
 LIBUSB_PATH = "libusb-1.0.so.0"  # soname; resolves via ldconfig everywhere
 
+# post-delete flash-erase window: observed from ~2 s to well over 30 s
+ERASE_TIMEOUT_S = 120
+
 LIBUSB_TIMEOUT = -7
 LIBUSB_BUSY = -6
 
@@ -610,24 +613,41 @@ class DS330:
     def delete_file(self, folder: int, file_index: int):
         """§9.9: `A0 <folder> <file WORD x2>` (live-verified).
 
-        Deleting triggers a flash erase that takes a few seconds, during
-        which the device answers the interrupt endpoint with a stream
-        of "idle" ready polls (00 00 00 00 01 ..). We drain those until
-        they stop, so the next command can go out immediately. Do NOT
-        reset the device during this window -- a reset mid-erase leaves
-        it in a state only a physical replug recovers (established
-        live; the original implementation's automatic reset was the
-        real cause of the observed "post-delete wedge").
+        Deleting triggers a flash erase whose duration varies widely
+        (seconds to 30+ s near end-of-folder; see §9.9). During the
+        erase the device ignores commands: the delete's status may
+        never arrive, and the interrupt endpoint may emit "idle" ready
+        polls (00 00 00 00 01 ..) or nothing at all. The reliable
+        recovery is to KEEP THE SESSION OPEN and wait for the device to
+        answer again on its own -- every delete observed so far has
+        completed. Never libusb_reset_device() during the window: a
+        reset mid-erase leaves the device in a state only a physical
+        replug recovers (established live; the tool's original
+        automatic reset was the real cause of the "post-delete wedge").
         """
         self.run_sequence([DELETE_FILE], folder=folder, file_index=file_index)
-        # drain the ready-poll stream until the erase completes
-        while True:
+        # wait out the erase window: probe with a benign status frame
+        # until the device answers with a real (non-poll) status
+        probe = b"\x47\x02" + b"\x00" * 62
+        deadline = time.monotonic() + ERASE_TIMEOUT_S
+        while time.monotonic() < deadline:
             try:
-                status = self.usb.interrupt_in(timeout_ms=1500)
+                self.usb.bulk_out(probe)
+                status = self.usb.interrupt_in(timeout_ms=2500)
             except TimeoutError:
-                return  # polls stopped: erase finished, device ready
-            if status[:1] == b"\x06" or status[:4] == STATUS_REJECT_PREFIX:
-                return  # a real answer, not a poll; device is ready
+                time.sleep(1)
+                continue
+            except UsbError:
+                time.sleep(3)
+                continue
+            if status[:4] == b"\x00\x00\x00\x00":
+                time.sleep(1)      # leftover ready poll
+                continue
+            return                 # real status: device ready again
+        raise DS330Error(
+            f"device still busy {ERASE_TIMEOUT_S}s after deleting "
+            f"{chr(ord('A') + folder - 1)}{file_index:02d} (flash erase "
+            "did not finish) -- do NOT reset; wait or replug")
 
     def set_time(self, when: Optional[datetime.datetime] = None
                  ) -> datetime.datetime:

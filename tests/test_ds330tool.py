@@ -461,23 +461,57 @@ def test_save_recording_sets_mtime_to_stop(tmp_path):
 # ---------------------------------------------------------------------------
 
 def test_delete_file_frame():
-    # delete_file drains the post-delete ready-poll stream; give the
-    # fake a script where the poll is followed by silence (timeout)
-    class PollThenSilent(FakeUsb):
-        def interrupt_in(self, timeout_ms=None):
-            if not self.polled:
-                self.polled = True
-                return self._status
-            raise TimeoutError("poll stream ended")
+    # delete_file waits out the post-delete erase window by probing with
+    # a benign status frame until a REAL status comes back
+    class EraseThenReady(FakeUsb):
+        def __init__(self):
+            super().__init__([(ACCEPT_NO, [])])
+            self.probes = 0
 
-    fake = PollThenSilent([(ACCEPT_NO, [])])
-    fake.polled = False
+        def interrupt_in(self, timeout_ms=None):
+            # first: the delete frame's own status; then two ready
+            # polls; then a real status for the probe frame
+            self.n = getattr(self, "n", 0) + 1
+            if self.n == 1:
+                return self._status
+            if self.n <= 3:
+                return b"\x00\x00\x00\x00\x01\x00\x00\x00"  # poll
+            return ACCEPT  # probe answered: ready
+
+    fake = EraseThenReady()
+    fake.bulk_out = lambda data, timeout_ms=None: fake.sent.append(bytes(data))
+    fake._status = ACCEPT
     dev = t.DS330(usb=fake)
     dev.delete_file(5, 2)
     page = fake.sent[0]
     assert page[:6] == b"\xa0\x05" + b"\x02\x00" * 2
     assert len(page) == 64
-    assert fake.polled  # the drain loop actually ran
+    # the erase-window probe actually ran (probe frames were sent)
+    probes = [s for s in fake.sent[1:] if s[:2] == b"\x47\x02"]
+    assert len(probes) >= 1
+
+
+def test_delete_file_erase_timeout():
+    class NeverReady(FakeUsb):
+        def interrupt_in(self, timeout_ms=None):
+            if not getattr(self, "n", 0):
+                self.n = 1
+                return self._status
+            raise TimeoutError("still erasing")
+
+    fake = NeverReady([(ACCEPT, [])])
+    fake.bulk_out = lambda data, timeout_ms=None: fake.sent.append(bytes(data))
+    fake._status = ACCEPT
+    dev = t.DS330(usb=fake)
+    monkey_timeout = 0.2
+    import ds330tool
+    real = ds330tool.ERASE_TIMEOUT_S
+    ds330tool.ERASE_TIMEOUT_S = monkey_timeout
+    try:
+        with pytest.raises(t.DS330Error, match="still busy"):
+            dev.delete_file(5, 2)
+    finally:
+        ds330tool.ERASE_TIMEOUT_S = real
 
 
 def test_delete_after_only_on_verified_write(tmp_path, capsys):

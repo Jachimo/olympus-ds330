@@ -435,21 +435,30 @@ A0 <folder 1-5> <file WORD LE> <file WORD LE>
   (`ff 01 00 00 01 ..` status variant).
 - Deleting a nonexistent file is silently accepted (no error).
 - **Post-delete erase window (established live, 2026-11-23):** the
-  flash erase triggered by a delete takes several seconds. During it
-  the interrupt endpoint emits a CONTINUOUS STREAM of "idle/ready"
-  polls (`00 00 00 00 01 ..`, one every ~1.5 s) until the erase
-  finishes. Commands sent during the window are not answered. The
-  correct recovery is to drain the polls until they stop (or a real
-  `06`/reject status appears) — then the device takes commands
-  immediately. **Never `libusb_reset_device()` during the window:**
-  a reset mid-erase leaves the device in a state only a physical
-  replug recovers. (The Windows DLL's 3 s `0xbb8` timeout on delete
-  matches this erase window.) An earlier revision of the Linux tool
-  auto-reset right after deletes; the "post-delete wedge" was that
-  reset, not the delete itself.
-- Verified live: deleting RANDOM's file 2 then file 1, then all three
-  folder-A recordings (the last one deleting the ONLY file on the
-  device); the file table re-enumerates correctly after each.
+  flash erase triggered by a delete takes a variable amount of time —
+  from ~2 s to well over 30 s when deleting one of the last remaining
+  files. Behavior during the window:
+  - the delete's status may or may not arrive (`06..01` if it does;
+    silence is common and does NOT mean the delete failed);
+  - the device ignores commands (no status for new frames) and may
+    answer the interrupt endpoint with "idle/ready" polls
+    (`00 00 00 00 01 ..`), or with nothing at all;
+  - KEEP THE SESSION OPEN AND WAIT — every delete observed so far has
+    completed, and the device starts answering again on its own
+    (a 30 s silent wait recovered every case in testing).
+  **Never `libusb_reset_device()` during the window:** a reset
+  mid-erase puts the device in a state only a physical replug
+  recovers. An earlier revision of the Linux tool auto-reset right
+  after deletes; the "post-delete wedge" was that reset, not the
+  delete.
+- **Deleting renumbers the folder (live-verified):** after deleting
+  RANDOM's file 1 of 2, the remaining file moved to index 1. Sweeps
+  that delete as they go should keep addressing index 1, not advance
+  the index.
+- Verified live: deleting RANDOM's files 2 then 1, all three folder-A
+  recordings, and all four recordings of a fresh multi-folder test set
+  (A01/D01 via the CLI sweep, E01/E02 via the API). The file table
+  re-enumerates correctly after each delete.
 
 ### 9.7 Session management notes (live-tested)
 - The device rejects `18 <folder> <file>` (file open) unless the §9.1+§9.2
