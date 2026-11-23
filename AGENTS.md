@@ -46,16 +46,16 @@ protocol is proprietary and was fully reverse-engineered (see docs/).
 ## Session quirks (live-established — see protocol doc §9.7)
 
 - Init + folder-scan warmup must precede file operations in a session.
-- Query file info (`40 01`) before label/memory (`95 00`/`79 00`) — the
-  device stops answering `40 01` after them.
+- Query file info (`40 NN`/`41 NN`) before label/memory (`95 00`/
+  `79 00`) — the device stops answering `40`/`41` after them.
 - A wedged device needs a reset (`ds330tool.py reset`); it can also take
   >2 s to answer frames while wedged (tool uses an 8 s timeout).
 
 ## Open questions (from CURRENT_STATE.md)
 
 - Multi-file download: `18 <folder> <file>` verified with files in two
-  folders. The `40 01` file-info object only describes one file per
-  session; whether it can report other folders' files is unknown.
+  folders. The full file table is enumerable via `40 NN` (first) /
+  `41 NN` (next, empty = exhausted) per folder.
 - `47 01` (file-count) and `79 00` (memory) encodings not fully understood.
 - IOCTL→wire mapping of DSXUSB.DLL/SYS (0x98ff2004–0x98ff20a4) — internal
   branch only; the driver no longer needs it.

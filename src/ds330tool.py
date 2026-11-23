@@ -353,7 +353,15 @@ FOLDER_SCAN = [Frame(b"\x47\x01", pages=1, name="file-count")] + [
     for a in range(2, 6)]
 
 # §9.3 file info
-FILE_INFO = Frame(b"\x40\x01", pages=17, name="file-info")
+# §9.3 file info (folder-scoped, SOLVED 2026-11-22):
+#   40 NN = first file's info of folder NN (1-5); 41 NN = NEXT file's
+#   info of folder NN, advancing a per-session cursor per folder; an
+#   empty data stage means the folder is exhausted. (With one file on
+#   device, `41 01` returning no data made it look like a mere flush.)
+FILE_INFO = Frame(b"\x40", pages=17, name="file-info",
+                  suffix=lambda p: bytes([p["folder"]]))
+FILE_INFO_NEXT = Frame(b"\x41", pages=17, name="file-info-next",
+                       suffix=lambda p: bytes([p["folder"]]))
 FILE_INFO_FLUSH = Frame(b"\x41\x01", name="file-info-flush")
 
 # §9.4 download: `18 <folder> <file>` — second byte is the folder
@@ -381,7 +389,10 @@ def info_sequence() -> Sequence:
 
 def download_sequence() -> Sequence:
     """§9.4 session (data stream accumulated under results["stream"])."""
-    return [INIT, DEVICE_INFO, *FOLDER_SCAN, FILE_INFO, FILE_INFO_FLUSH,
+    return [INIT, DEVICE_INFO, *FOLDER_SCAN,
+            Frame(b"\x40", pages=17, name="file-info",
+                  suffix=lambda p: bytes([p["folder"]])),
+            FILE_INFO_FLUSH,
             OPEN_FILE, DATA_PHASE, STREAM]
 
 
@@ -503,26 +514,49 @@ class DS330:
                 raise
             return resolve_folder(spec, names=self.folder_names())
 
-    def info(self) -> dict:
-        """Device identity, label, folders, memory, file table.
+    def enumerate_files(self, folder: int) -> list:
+        """§9.3: the complete file table of one folder.
 
-        Query order matters (established live): `40 01` stops being
-        answered after the label (`95 00`) or memory (`79 00`) queries,
-        so the file-info query runs first.
+        `40 NN` returns the folder's first file info; repeated `41 NN`
+        returns each subsequent file, an empty data stage ends the list
+        (per-session cursor, resets on USB reconnect). Order matters:
+        this must run before the label/memory queries.
         """
-        r = self.run_sequence([*info_sequence(), FILE_INFO,
-                                LABEL_QUERY, MEMORY_QUERY])
+        files = []
+        r = self.run_sequence([FILE_INFO], folder=folder)
+        data = r.get(FILE_INFO.key(), b"")
+        if not data:
+            return files
+        files.append(parse_file_info(data) or {})
+        for _ in range(99):  # hard cap; folders max out far below this
+            r = self.run_sequence([FILE_INFO_NEXT], folder=folder)
+            data = r.get(FILE_INFO_NEXT.key(), b"")
+            if not data:
+                break
+            files.append(parse_file_info(data) or {})
+        return files
+
+    def info(self) -> dict:
+        """Device identity, label, folders, memory, full file table.
+
+        Query order matters (established live): file-info queries (`40`/
+        `41`) stop being answered after the label (`95 00`) or memory
+        (`79 00`) queries, so the file table is enumerated first.
+        """
+        r = self.run_sequence(info_sequence())
         folders = [p[4:12].decode("ascii", "replace").strip()
                    for f in FOLDER_SCAN[1:] if len(p := r.get(f.key(), b"")) >= 12]
-        label = self._query(LABEL_QUERY, r)
-        memory = self._query(MEMORY_QUERY, r)
-        fi = parse_file_info(r.get(FILE_INFO.key()))
+        file_table = {}
+        for folder in range(1, 6):
+            file_table[folder] = self.enumerate_files(folder)
+        label = self._query(LABEL_QUERY)
+        memory = self._query(MEMORY_QUERY)
         return {
             "device": ascii_stripped(r.get(DEVICE_INFO.key())),
             "label": label,
             "folders": [f for f in folders if f],
             "memory": memory,
-            "file_info": fi or None,
+            "file_table": file_table,
         }
 
     def _query(self, frame: Frame, r=None):
@@ -676,22 +710,28 @@ def cmd_info(dev, args):
     i = dev.info()
     print(f"device : {i['device']}")
     print(f"label  : {i['label']}")
-    print(f"folders: {', '.join(i['folders']) if i['folders'] else '?'}")
+    print(f"folders: A, " + ", ".join(
+        f"{chr(ord('A') + n)}='{name}'"
+        for n, name in enumerate(i['folders'], start=1)))
     if i["memory"] is not None:
         print(f"memory : {i['memory']:,}")
-    fi = i["file_info"]
-    if not fi:
+    total = 0
+    for folder in range(1, 6):
+        letter = chr(ord("A") + folder - 1)
+        name = i["folders"][folder - 2] if folder >= 2 else ""
+        files = i["file_table"].get(folder, [])
+        for index, fi in enumerate(files, start=1):
+            if not fi:
+                continue
+            dates = fi.get("dates")
+            when = (f"{dates['start']:%Y-%m-%d %H:%M:%S} "
+                    f"({dates['duration']})" if dates
+                    else fi.get("date_digits", "?"))
+            print(f"file   : {letter}{index:02d}  {fi.get('name')}  {when}"
+                  + (f"  [{name}]" if name else ""))
+            total += 1
+    if not total:
         print("file   : (none -- no recordings on device)")
-        return
-    print(f"file   : {fi['name']}  ({fi['format']})  "
-          f"label={fi['label']}  flash_region={fi['flash_region']}")
-    dates = fi["dates"]
-    if dates:
-        print(f"dates  : start {dates['start']:%Y-%m-%d %H:%M:%S}  "
-              f"stop {dates['stop']:%Y-%m-%d %H:%M:%S}  "
-              f"duration {dates['duration']}")
-    else:
-        print(f"dates  : {fi['date_digits']!r} (unparsed)")
 
 
 def resolve_folder(spec, names=None):

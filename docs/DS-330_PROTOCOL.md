@@ -54,13 +54,21 @@ Notes:
 
 Format: `cmd [arg]` → response. Verified with device reset between probes.
 
-### 0x40 — file info object stream (CONFIRMED, deterministic)
-- `40 01` → starts a 17-page (1088-byte) sequential stream. Each bulk_in
-  returns the next page; the cursor auto-advances and does NOT reset when
-  the command is repeated. `40 02` starts at page 1. Args 11, 12, ff: no
-  response. Stream ends with timeout after last page (deterministic, 3x
-  verified).
-- Contents of the 17-page object (one file on device, "<RECORDING-NAME>"):
+### 0x40 / 0x41 — file info: first/next per folder (CONFIRMED, REVISED 2026-11-22)
+- `40 NN` → returns the FIRST file's 17-page (1088-byte) info object of
+  folder NN (1–5 = A–E). Each bulk_in returns the next page; the page
+  cursor auto-advances. A 3-byte `40 NN <byte>` form behaves the same
+  (third byte ignored); other args return no data.
+- `41 NN` → returns the NEXT file's info object of folder NN, advancing a
+  per-session cursor; an empty data stage means the folder is exhausted.
+  (With exactly one file on device, `41 01` returning no data made it
+  look like a mere "flush" in the original player capture.)
+- Enumeration per folder: `40 NN`, then repeat `41 NN` until empty. The
+  cursor resets on USB reconnect. Must run before the label/memory
+  queries (§9.7 ordering).
+- Verified live (3 files, folders A and E): `40 01` → JSMY0001,
+  `40 05` → JSMY0002, `41 05` → JSMY0003, second `41 05` → empty.
+- Contents of the 17-page object (per file, example "<RECORDING-NAME>"):
   - page 0: file header: `"<RECORDING-NAME>"` (name), `02 64 73 73 01 00 01 00 02 00
     00 00` (dss magic), `"<USER-LABEL>"` (label), date digits from offset
     0x2F: `020101000105020101002412002306` (30 ASCII digits; see §3.1)
@@ -87,8 +95,11 @@ Decoder: `decode_date_digits()` in src/ds330tool.py (unit-tested against
 the live capture in tests/data/fileinfo.bin).
 
 ### 0x47 — status/counter (CONFIRMED)
-- `47 01` and `47 00000000` → ~41 bytes of zeros. Possibly GetFileNum or
-  OpenFile. Does NOT redirect the 0x40 stream to file data (tested).
+- `47 01` → 41 bytes: dword 1 + zeros. GetFileNum-like; the dword is 1
+  even with zero or three files, so its semantics are unclear.
+- `47 01` doubles as folder A's scan entry (folder A has no readable
+  name; `47 02..05` are folders B–E). Does NOT redirect the 0x40 stream
+  to file data (tested).
 
 ### 0x95 — device label (CONFIRMED)
 - `95 01` → `"<USER-LABEL>"` (16 bytes, zero-padded). The recorder's user label.
@@ -176,7 +187,7 @@ is too small for a real recording; likely metadata size). Hypotheses:
 |---------|--------------------|------------|
 | GetDeviceInfo | 0x78 / 0xb2 | medium |
 | GetMemorySize | 0x79 | low |
-| GetFileInfoFirst/Next | 0x40 stream | high |
+| GetFileInfoFirst/Next | `40 NN` / `41 NN` (confirmed 2026-11-22) | confirmed |
 | GetFileNum | 0x47 | low |
 | GetFolderName | 0x95 | medium |
 | GetRecoderInfo | 0xc0 | low |
@@ -321,12 +332,18 @@ bulk-OUT pages (zero-padded).
 `47 05` -> `"RANDOM  "` (folder 4)
 Skipping this warmup makes the device reject the file-open command.
 
-### 9.3 File info
-`40 01` -> 17-page (1088 B) file info object (see §3). Response page 0
-carries the file header (name/dss magic/label/date), page 8 offset +0x09
-carries the LE dword size (0x00152790 = 1,386,384).
-`41 01` -> no data stage (`ff 01 .. 01` status variant); player sends it
-between info and open.
+### 9.3 File info (REVISED 2026-11-22: folder-scoped first/next)
+`40 NN` -> 17-page (1088 B) info object for the FIRST file of folder NN
+(see §3). Response page 0 carries the file header (name/dss magic/label/
+date), page 8 offset +0x09 carries a flash-region dword (NOT the file
+size; roughly 58% of the DSS size — the compressed-audio payload).
+`41 NN` -> the NEXT file's info object of folder NN; empty data stage
+when the folder is exhausted. (In the original player capture the device
+held exactly one file, so `41 01` looked like a no-data flush; the
+player in fact uses it to walk the file list — GetFileInfoFirst/Next in
+the DSX API.) Full file table: `40 NN`, repeat `41 NN` until empty,
+per folder 1–5. Cursor is per-session; enumerate BEFORE the label/
+memory queries (§9.7).
 
 ### 9.4 File download (the money sequence)
 | Frame | Notes |

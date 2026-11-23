@@ -35,7 +35,10 @@ All details in `docs/DS-330_PROTOCOL.md` §9. Summary:
 
 - Connect: `f0 00` (init), `b2 00` (confirm)
 - Warmup folder scan (REQUIRED before file ops): `47 01` .. `47 05`
-- File info: `40 01` → 17-page object; `41 01` (no data)
+- File info (SOLVED 2026-11-22): `40 NN` = first file's info of folder
+  NN; `41 NN` = next file (empty data stage = folder exhausted);
+  per-session cursor. `info` now enumerates the full file table.
+  (With one file on device this looked like `40 01` + `41 01` flush.)
 - **Download: `18 <folder> <file>`** (folder 1–5 = A–E, third byte is the
   1-based file within it; resolved issue #2's single-folder limitation)
   **→ `80 00`** (data phase) → bulk-in pages until timeout
@@ -91,10 +94,11 @@ All details in `docs/DS-330_PROTOCOL.md` §9. Summary:
    letter, or this device's name — names are user-settable per recorder
    and are read live via the 47 02..05 queries, never hardcoded).
    Plain `download` sweeps all folders. Verified live with recordings
-   in folders A and E: all download and decode via ffmpeg. The `40 01`
-   file-info object still reflects only one file; per-file info beyond
-   that object is unknown (the DSS header itself carries per-file
-   timestamps, which the tool uses for naming and file mtimes).
+   in folders A and E: all download and decode via ffmpeg.
+   **File table SOLVED same day:** `40 NN`/`41 NN` = first/next file
+   info per folder; `info` lists every recording with names and dates
+   (live-verified with 3 files across folders A and E). The DSS header
+   also carries per-file timestamps, used for naming and file mtimes.
 2. **Folder renaming** (the Windows software can set folder names) is
    NOT yet decoded — a future feature.
 3. **`--wav` conversion** shells out to ffmpeg; DSS-SP decode otherwise
