@@ -63,17 +63,75 @@ class ProtocolRejected(DS330Error):
 # Transport: thin, typed ctypes wrapper over system libusb-1.0
 # ---------------------------------------------------------------------------
 
-class _DeviceDescriptor(C.Structure):
-    _pack_ = 1  # USB descriptor layout is packed
-    _fields_ = [
-        ("bLength", C.c_uint8), ("bDescriptorType", C.c_uint8),
-        ("bcdUSB", C.c_uint16), ("bDeviceClass", C.c_uint8),
-        ("bDeviceSubClass", C.c_uint8), ("bDeviceProtocol", C.c_uint8),
-        ("bMaxPacketSize0", C.c_uint8), ("idVendor", C.c_uint16),
-        ("idProduct", C.c_uint16), ("bcdDevice", C.c_uint16),
-        ("iManufacturer", C.c_uint8), ("iProduct", C.c_uint8),
-        ("iSerialNumber", C.c_uint8), ("bNumConfigurations", C.c_uint8),
-    ]
+# USB device descriptor: 18 bytes, packed. Parsed via struct.unpack
+# (a ctypes Structure with _pack_ would trigger CPython's packed-layout
+# deprecation on python 3.14+).
+_DESCRIPTOR_FMT = "<BBHBBBBHHHBBBB"  # sizeof == 18, like usb_device_descriptor
+
+
+def parse_device_descriptor(buf: bytes):
+    """Unpack an 18-byte libusb device descriptor -> dict."""
+    if len(buf) < 18:
+        raise UsbError(f"short device descriptor ({len(buf)} bytes)")
+    keys = ("bLength", "bDescriptorType", "bcdUSB", "bDeviceClass",
+            "bDeviceSubClass", "bDeviceProtocol", "bMaxPacketSize0",
+            "idVendor", "idProduct", "bcdDevice", "iManufacturer",
+            "iProduct", "iSerialNumber", "bNumConfigurations")
+    return dict(zip(keys, struct.unpack(_DESCRIPTOR_FMT, buf[:18])))
+
+
+def _libudev_paths():
+    """Absolute paths to the system libudev, if present. libusb-1.0
+    depends on libudev.so.1; non-system pythons (e.g. Linuxbrew builds,
+    which link a private glibc) cannot resolve that dependency through
+    their own library search path, so we pre-load it by absolute path
+    with RTLD_GLOBAL first (established live: this makes brew python
+    load the system libusb cleanly)."""
+    import ctypes.util
+    import glob
+    paths = []
+    found = ctypes.util.find_library("udev")
+    if found and os.path.isabs(found):
+        paths.append(found)
+    paths += sorted(glob.glob("/usr/lib/*/libudev.so.1")
+                    + glob.glob("/lib/*/libudev.so.1")
+                    + glob.glob("/usr/lib/libudev.so.1"))
+    return paths
+
+
+def load_libusb():
+    """Open the system libusb. Tries the plain soname first (resolves
+    via ldconfig on any distro), then libudev-preloading fallbacks for
+    non-system pythons. Raises UsbError with an actionable message if
+    nothing works."""
+    candidates = [LIBUSB_PATH, "libusb-1.0.so"]
+    attempts = []
+    for name in candidates:
+        try:
+            return C.CDLL(name)
+        except OSError as e:
+            attempts.append(f"{name}: {e}")
+    for udev in _libudev_paths():
+        try:
+            C.CDLL(udev, mode=C.RTLD_GLOBAL)
+        except OSError as e:
+            attempts.append(f"preload {udev}: {e}")
+            continue
+        # after preloading libudev, load libusb itself by absolute path:
+        # non-system pythons also cannot resolve the bare soname
+        import glob
+        for lib in sorted(glob.glob("/usr/lib/*/libusb-1.0.so.0")
+                          + glob.glob("/lib/*/libusb-1.0.so.0")):
+            try:
+                return C.CDLL(lib)
+            except OSError as e:
+                attempts.append(f"via {udev}, {lib}: {e}")
+    raise UsbError(
+        "cannot load libusb-1.0 (is it installed?). Tried:\n  "
+        + "\n  ".join(attempts)
+        + f"\nNote: this python is {sys.executable} -- non-system pythons "
+          "(e.g. Linuxbrew) need special handling to load the system "
+          "libusb; if this persists, try the distro python3.")
 
 
 class Usb:
@@ -106,7 +164,7 @@ class Usb:
 
     def __init__(self, timeout_ms=2000):
         self.timeout_ms = timeout_ms
-        self._lib = C.CDLL(LIBUSB_PATH)
+        self._lib = load_libusb()
         for name, argtypes, restype in self._SYMS:
             fn = getattr(self._lib, name)
             fn.argtypes = argtypes
@@ -127,10 +185,11 @@ class Usb:
         try:
             for i in range(n):
                 dev = devs[i]
-                desc = _DeviceDescriptor()
-                if self._lib.libusb_get_device_descriptor(dev, C.byref(desc)) != 0:
+                buf = (C.c_ubyte * 32)()
+                if self._lib.libusb_get_device_descriptor(dev, buf) != 0:
                     continue
-                if desc.idVendor == VID and desc.idProduct == PID:
+                desc = parse_device_descriptor(bytes(buf))
+                if desc["idVendor"] == VID and desc["idProduct"] == PID:
                     # libusb_open takes its own reference, so open before the
                     # list is freed; freeing first dangles `dev`.
                     handle = C.c_void_p()

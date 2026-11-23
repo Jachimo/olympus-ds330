@@ -10,9 +10,9 @@ fixtures (tests/data/, captured 2026-11-22 from a live DS-330 via the
 Pure-protocol tests use a FakeUsb that replays scripted frame/status/data
 responses, so run_sequence()'s frame rules are tested without hardware.
 """
-import ctypes as C
 import datetime
 import os
+import struct
 import sys
 
 sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
@@ -20,8 +20,6 @@ sys.path.insert(0, os.path.join(os.path.dirname(__file__), "..", "src"))
 import pytest  # noqa: E402
 
 import ds330tool as t  # noqa: E402
-
-sizeof = C.sizeof
 
 DATA = os.path.join(os.path.dirname(__file__), "data")
 
@@ -329,6 +327,12 @@ def test_usb_error_hierarchy():
 
 
 def test_descriptor_layout():
-    # libusb packs this struct; Python ctypes would pad without _pack_
-    assert t._DeviceDescriptor._pack_ == 1
-    assert sizeof(t._DeviceDescriptor) == 18  # sizeof(struct usb_device_descriptor)
+    # USB device descriptor: 18 packed bytes; unpack must round-trip VID/PID
+    desc = bytes([18, 1]) + struct.pack("<H", 0x0110) + bytes([9, 0, 0, 8]) \
+        + struct.pack("<H", 0x07B4) + struct.pack("<H", 0x0206) \
+        + struct.pack("<H", 0x0100) + bytes([1, 2, 3, 1])
+    assert len(desc) == 18
+    parsed = t.parse_device_descriptor(desc)
+    assert parsed["idVendor"] == t.VID
+    assert parsed["idProduct"] == t.PID
+    assert parsed["bLength"] == 18
