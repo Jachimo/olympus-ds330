@@ -257,6 +257,69 @@ def test_set_time_frame():
 
 
 # ---------------------------------------------------------------------------
+# CLI settime --utc / --time wiring
+# ---------------------------------------------------------------------------
+
+def test_main_settime_utc_sends_utc_clock(monkeypatch, capsys):
+    sent = {}
+
+    class FakeDS330:
+        def __init__(self, **kw):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            pass
+
+        def reset(self):
+            pass
+
+        def set_time(self, when):
+            sent["when"] = when
+            return when
+
+    class FakeDT(datetime.datetime):
+        @classmethod
+        def now(cls, tz=None):
+            base = cls(2026, 11, 22, 12, 34, 56)
+            return base if tz is None else base.replace(tzinfo=tz)
+
+    monkeypatch.setattr(t, "DS330", FakeDS330)
+    monkeypatch.setattr(t.datetime, "datetime", FakeDT)
+    assert t.main(["settime", "--utc"]) == 0
+    # the naive UTC wall time was sent, not the local time
+    assert sent["when"] == datetime.datetime(2026, 11, 22, 12, 34, 56)
+
+
+def test_main_settime_utc_with_explicit_time(monkeypatch, capsys):
+    sent = {}
+
+    class FakeDS330:
+        def __init__(self, **kw):
+            pass
+
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            pass
+
+        def reset(self):
+            pass
+
+        def set_time(self, when):
+            sent["when"] = when
+            return when
+
+    monkeypatch.setattr(t, "DS330", FakeDS330)
+    assert t.main(["settime", "--utc", "--time", "20261122120000"]) == 0
+    # explicit digits are used verbatim, tagged as UTC only in intent
+    assert sent["when"] == datetime.datetime(2026, 11, 22, 12, 0, 0)
+
+
+# ---------------------------------------------------------------------------
 # usb-level error mapping
 # ---------------------------------------------------------------------------
 

@@ -460,7 +460,12 @@ class DS330:
 
     def set_time(self, when: Optional[datetime.datetime] = None
                  ) -> datetime.datetime:
-        """§9.6: `90` + 12 ASCII digits YYMMDDHHMMSS."""
+        """§9.6: `90` + 12 ASCII digits YYMMDDHHMMSS.
+
+        `when` is a naive wall-clock time as it should appear on the
+        recorder. Default: the computer's local time; the CLI's --utc
+        option passes UTC instead so recording stamps are zone-independent.
+        """
         when = when or datetime.datetime.now()
         self.run_sequence([SET_TIME], when=when)
         return when
@@ -652,14 +657,20 @@ def main(argv=None):
 
     s = sub.add_parser("settime", help="set recorder clock from the computer clock")
     s.add_argument("--time", metavar="YYYYMMDDHHMMSS",
-                   help="specific time instead of now (local time)")
+                   help="specific time instead of now (interpreted as UTC with --utc, local otherwise)")
+    s.add_argument("--utc", action="store_true",
+                   help="set the clock to UTC instead of the local "
+                        "timezone (with --time: interpret the digits as UTC)")
 
     sub.add_parser("reset", help="reset the device (recovery without replug)")
 
     args = p.parse_args(argv)
     when = None
-    if args.command == "settime" and args.time:
-        when = datetime.datetime.strptime(args.time, "%Y%m%d%H%M%S")
+    if args.command == "settime":
+        if args.time:
+            when = datetime.datetime.strptime(args.time, "%Y%m%d%H%M%S")
+        elif args.utc:
+            when = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
 
     try:
         with DS330(verbose=args.verbose, timeout_ms=8000) as dev:
