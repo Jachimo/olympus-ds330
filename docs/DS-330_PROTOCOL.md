@@ -6,9 +6,9 @@
 connected and idle.  
 **See DS-330_NOTES.md for the wider project log.** This document is the
 protocol reference.  
-Status: **COMPLETE** — download and clock-set both work
-end-to-end from Linux (`src/ds330tool.py`).  
-Last updated: 2026-11-21.  
+Status: **COMPLETE** — download, clock-set, and full file-table
+enumeration all work end-to-end from Linux (`src/ds330tool.py`).  
+Last updated: 2026-11-22.  
 
 ---
 
@@ -33,7 +33,11 @@ Endpoint max packet size: 64 bytes (full-speed, bulk).
 
 These commands target **interface 0** only. The pattern:
 
-1. **Command:** BULK OUT 0x02, 1–2 bytes (`[cmd][arg]`).
+1. **Command:** BULK OUT 0x02, 1–14 bytes: `[cmd][arg...]`, zero-padded
+to a full 64-byte page (the device inspects only the leading bytes).
+   Commands are 1–2 bytes for most queries, but 3 bytes for the
+   open-file frame (`18 <folder> <file>`) and 13 bytes for clock set
+   (`90` + 12 ASCII digits).
 2. **Status:** INTERRUPT IN 0x83, 8 bytes:
    - `06 00 00 00 01 00 00 00` = command accepted, data stage follows
    - `ffff000001000000` = command rejected (no data stage will come)
@@ -66,15 +70,18 @@ Format: `cmd [arg]` → response. Verified with device reset between probes.
 - Enumeration per folder: `40 NN`, then repeat `41 NN` until empty. The
   cursor resets on USB reconnect. Must run before the label/memory
   queries (§9.7 ordering).
-- Verified live (3 files, folders A and E): `40 01` → JSMY0001,
-  `40 05` → JSMY0002, `41 05` → JSMY0003, second `41 05` → empty.
+- Verified live (3 files, folders A and E): `40 01` → file 1's object,
+  `40 05` → the RANDOM folder's first file, `41 05` → its second file,
+  a further `41 05` → empty.
 - Contents of the 17-page object (per file, example "<RECORDING-NAME>"):
   - page 0: file header: `"<RECORDING-NAME>"` (name), `02 64 73 73 01 00 01 00 02 00
     00 00` (dss magic), `"<USER-LABEL>"` (label), date digits from offset
     0x2F: `020101000105020101002412002306` (30 ASCII digits; see §3.1)
   - page 1: date continuation + `ff 07 ff` padding
   - pages 2–7: FF fill (erased slots)
-  - page 8: dword `90 27 15 00` (LE 0x00152790 = 1,384,080) — size or region
+  - page 8: dword `90 27 15 00` (LE 0x00152790 = 1,386,384) — a
+    flash-region/metadata size, NOT the file size (it is ~58% of the
+    DSS file size — likely the compressed-audio payload length)
   - pages 9–16: zeros/FF
 - This object is the same data that command `00` primes (older C-based dump
   read 32 pages via `00`; the file header was at page 15 of that dump).
@@ -138,11 +145,15 @@ All tested on fresh state (device reset between each), `out=0 in=-7`:
 
 - `0x7b` flash-sector read: 1-byte args (00,01,02,03,10,20), 4-byte LE args
   (0,1,2), and single-byte — all rejected. NOT the sector path on this FW.
-- `0x41`, `0x42`, `0x43`, `0x44`, `0x45`, `0x46`, `0x30`, `0x33` with `01`
-  arg — rejected.
+- `0x42`, `0x43`, `0x44`, `0x45`, `0x46`, `0x30`, `0x33` with `01`
+  arg — rejected. (0x40 and 0x41 were on the original rejected list but
+  are now CONFIRMED working as the folder-scoped first/next file-info
+  pair — see §3; the original probe only ever got an empty response
+  because the device held no recordings at probe time.)
 - `0x50`, `0x48`, `0x51`, `0x52` with 1-byte and 4-byte args — rejected.
   The DLL IOCTL→wire mapping is NOT a simple offset-4 correspondence.
-- `0x40` with args 02 (works = page 1), 11, 12, ff — 11/12/ff rejected.
+- `0x40` with args 06–10, 11, 12, 20, 40, 81, ff — no data returned
+  (only 01–05, the folder selectors, produce the info object).
 
 ## 5. Session management
 
@@ -154,22 +165,30 @@ All tested on fresh state (device reset between each), `out=0 in=-7`:
 
 ## 6. Toolchain notes
 
-- Reference reader: `dumpall.py` (Python ctypes + libusb-1.0.so.0, no
-  compiler headers needed). System python3.10 works; linuxbrew python3.14
-  lacks libudev and cannot load libusb.
+- Reference tool: `src/ds330tool.py` (Python ctypes + libusb-1.0.so.0,
+  stdlib only). System python3.10 works directly. Linuxbrew python3.14
+  also works since 2026-11-22: its private glibc cannot resolve the
+  libusb soname or libusb's libudev dependency, so the tool pre-loads
+  the system libudev by absolute path (RTLD_GLOBAL) and then opens
+  libusb by absolute path as a fallback.
 - ctypes binding gotchas:
-  - Do NOT `libusb_free_device_list` before `libusb_open` (open takes its
-    own reference; freeing first = SIGSEGV).
-  - Device descriptor must be read via a proper `Desc` STRUCTURE with
-    `byref()`; a raw ubyte array segfaults.
-  - `idVendor` is little-endian in the raw bytes: 07b4 = bytes B4 07.
+  - Do NOT `libusb_free_device_list` before `libusb_open` (open takes
+    its own reference; freeing first = SIGSEGV).
+  - The 18-byte USB device descriptor can be read into a plain ubyte
+    buffer and parsed with `struct.unpack("<BBHBBBBHHHBBBB")` — a
+    ctypes Structure with `_pack_` also works but is deprecated on
+    python 3.14+ (packed-layout deprecation).
+  - Descriptor fields are little-endian: idVendor 07b4 = bytes B4 07.
 - `cmdscan.py` sweeps the full 2-byte command space with reset between
-  probes; output in `cmdscan.txt`/`cmdscan.log`.
+  probes; output kept on the internal branch).
 
-## 7. Open questions
+## 7. Open questions (historical — main questions solved)
 
 The .dss recording bytes are NOT in the 17-page info object (page 8 dword
-is too small for a real recording; likely metadata size). Hypotheses:
+is a metadata size, not the audio). SOLVED (2026-11-21): the data path is
+the 3-byte `18 <folder> <file>` open + `80 00` data phase (§9.4),
+confirmed by usbmon capture of the real player. The earlier hypotheses
+are kept for history:
 
 1. File data is read via a different command family (0x50+ range retested
    negative; maybe 3-byte or longer commands, or commands not in 0x00–0xff).
@@ -183,24 +202,27 @@ is too small for a real recording; likely metadata size). Hypotheses:
 
 ## 8. Mapping to DSX API (semantic reference)
 
-| DSX API | likely wire command | confidence |
-|---------|--------------------|------------|
-| GetDeviceInfo | 0x78 / 0xb2 | medium |
-| GetMemorySize | 0x79 | low |
-| GetFileInfoFirst/Next | `40 NN` / `41 NN` (confirmed 2026-11-22) | confirmed |
-| GetFileNum | 0x47 | low |
-| GetFolderName | 0x95 | medium |
-| GetRecoderInfo | 0xc0 | low |
-| SetPCTime | ? | none |
+| DSX API | wire command | confidence |
+|---------|--------------|------------|
+| GetDeviceInfo / ConectConfirm | `b2 00` (model + label) | confirmed |
+| GetRecoderInfo / capability table | `78` | confirmed (content undecoded) |
+| GetMemorySize | `79` | low |
+| GetFileNum | `47 01` (dword is 1 regardless — semantics unclear) | low |
+| GetFolderName | `47 02..05` (folders B–E; user-settable names) | confirmed |
+| GetFileInfoFirst | `40 NN` (first file of folder NN) | confirmed |
+| GetFileInfoNext | `41 NN` (next file; empty = exhausted) | confirmed |
+| OpenFile/ReadFile | `18 <folder> <file>` + `80 00` data phase | confirmed |
+| SetPCTime | `90` + YYMMDDHHMMSS ASCII | confirmed |
 | DeleteFile | ? | none |
-| OpenFile/ReadFile | ? | none — main blocker |
+| SetFolderName | ? | none — future work |
 
-### 0x47 — new discoveries (2026-11-20 continued)
-- `47 01` → 41 zeros (counter/status, previously known)
-- `47 02` → `00 00 00 00 "DICTATE" 00...` — device mode/folder name!
-  This is likely GetFolderName or GetDeviceInfo string field.
-- `47 03` and higher: untested.
-- `47 01 02` (3-byte form) → also responds with zeros (same as 47 01).
+### 0x47 — new discoveries (2026-11-20; numbering corrected 2026-11-22)
+- `47 01` → 41 bytes: dword 1 + zeros (counter/status, previously known)
+- `47 02` → `00 00 00 00 "DICTATE" 00...` — a folder NAME (user-set
+  label; folders B–E via args 02–05; see below)
+- `47 03..05` → the other folder names (LECTURE / TO DO / RANDOM on
+  this device); `47 06+` rejected
+- `47 01 02` (3-byte form) → also responds with zeros (same as 47 01)
 
 ### 0x47 02 discovery analysis
 CORRECTED (2026-11-22): the string "DICTATE" is NOT intrinsically
@@ -217,7 +239,7 @@ count/index field.
 - `47 04` → `00 00 00 00 "TO DO   " 00...` — folder D's name
 - `47 05` → `00 00 00 00 "RANDOM  " 00...` — folder E's name
 - `47 01` → 41 bytes: dword 1 + zeros (folder A's scan entry; A exposes
-  no readable name — see §9.7)
+  no readable name)
 - Format: 4 zero bytes (count/index) + 8-byte ASCII name + zero pad
 - This maps to DSXGetFolderName/SetFolderName in the DSX API.
 - The recorder's folder names are USER-SETTABLE per device (the
@@ -232,10 +254,12 @@ count/index field.
 - `47 NN` = GetFolderName for folder NN (folders 2–5 = B–E named;
   folder 1 = A returns the counter)
 
-### File data hypothesis update
-File data is likely accessed via a sequence: select folder (0x47 XX),
-then select file (0x40 arg?), then read data pages. Or via dedicated
-OpenFile/ReadFile commands in the 0x48+ range.
+### File data hypothesis update (SUPERSEDED — solved via `18`/`80`)
+Historical hypothesis (2026-11-20): file data accessed by select
+folder (0x47) then select file (0x40 arg) then read data pages, or a
+dedicated command in the 0x48+ range. Reality (2026-11-21): the
+`18 <folder> <file>` open + `80 00` data phase (§9.4); the 0x48+ range
+is rejected, and 0x40/0x41 are metadata-only (§9.3).
 
 ### 0x47 folder name mapping (2026-11-20)
 - 0x47 02..05 = this device's folder names for folders B–E; user-set
@@ -327,8 +351,9 @@ OpenFile/ReadFile per file.
 
 ## 9. COMPLETE CONFIRMED SEQUENCES (from usbmon capture)
 
-Captured 2026-11-21 (`logs/usbmon2_download.pcap`, `logs/usbmon2_vm.pcap`;
-decode script `src/parse_pcap.py`). All commands are sent as full 64-byte
+Captured 2026-11-21 from a Windows VM running the real DSS Player with
+usbmon on the host (pcap files kept on the internal branch; decode
+script `src/parse_pcap.py`). All commands are sent as full 64-byte
 bulk-OUT pages (zero-padded).
 
 ### 9.1 Connect / init handshake
@@ -338,11 +363,12 @@ bulk-OUT pages (zero-padded).
 | `b2 00` | `06..01` | 1 page `"DS-330  <label>"` | ConectConfirm / GetDeviceInfo |
 
 ### 9.2 Folder scan (warmup before file operations — REQUIRED)
-`47 01` -> 1 page (status/GetFileNum-ish, `01 00 00 00 ...`)
-`47 02` -> 1 page `00*4 + "DICTATE"` (folder 1)
-`47 03` -> `"LECTURE "` (folder 2)
-`47 04` -> `"TO DO   "` (folder 3)
-`47 05` -> `"RANDOM  "` (folder 4)
+`47 01` -> 1 page (status/GetFileNum-ish, `01 00 00 00 ...`; folder A's
+scan entry — A exposes no readable name)
+`47 02` -> 1 page `00*4 + "DICTATE"` (folder B's name; user-set)
+`47 03` -> `"LECTURE "` (folder C)
+`47 04` -> `"TO DO   "` (folder D)
+`47 05` -> `"RANDOM  "` (folder E)
 Skipping this warmup makes the device reject the file-open command.
 
 ### 9.3 File info (REVISED 2026-11-22: folder-scoped first/next)
@@ -388,9 +414,10 @@ then repeating:  64-byte frame (discard) + 512 bytes of dss
 stream tail       folder-name table — discard
 ```
 Single fixup: dss[792] = 0xFE (flag byte the player sets; stream carries
-0xFF). Extractor: `src/extract_dss.py` (legacy offsets apply to the full
-player session stream with its 393-byte preamble; `DS330.download_raw` +
-`extract_dss` in `src/ds330tool.py` implement the data-phase layout above).
+0xFF). Extractor: `extract_dss()` in `src/ds330tool.py` (implements the
+data-phase layout above; unit-tested against a real captured stream in
+`tests/data/`). The legacy `src/extract_dss.py` offsets apply only to
+full player-session captures with their 393-byte preamble.
 
 ### 9.6 Clock set (SetPCTime)
 ```
@@ -400,17 +427,23 @@ e.g. captured frame `90 32 36 31 31 32 32 30 32 31 32 31 37` =
 `0x90` + `"261122021217"` = 2026-11-22 02:12:17. Response: accepted status.
 
 ### 9.7 Session management notes (live-tested)
-- The device rejects `18 01 01` (file open) unless the §9.1+§9.2
+- The device rejects `18 <folder> <file>` (file open) unless the §9.1+§9.2
   init/warmup ran first in the same session.
 - **Query order matters (2026-11-22):** the device stops answering
-  `40 01` after a `95 00` (label) or `79 00` (memory) query in the same
-  session — always query file info first. The v1.0 `info()` does.
+  `40 NN`/`41 NN` after a `95 00` (label) or `79 00` (memory) query in
+  the same session — always enumerate the file table before those.
+  The tool's `info()` does.
 - **Wedge behavior (2026-11-22):** a stale session produces transfer
   failures (bulk OUT timeout, interrupt status timeouts); a device reset
   plus retry fixes it. A wedged device can take >2 s to answer a frame
-  (observed up to ~5 s) — use a generous timeout (the v1.0 tool uses 8 s).
+  (observed up to ~5 s) — use a generous timeout for the interrupt
+  status (the tool uses 8 s). Data-stage pages, by contrast, arrive
+  back-to-back or not at all — a 1 s timeout there is correct and keeps
+  `info` fast.
 - `libusb_reset_device()` + fresh open fully recovers any wedged state.
 - `set_configuration(1)` returns BUSY (-6); ignore.
+- The 0x40/0x41 enumeration cursor is per-session and resets on USB
+  reconnect (fresh session starts at each folder's first file).
 
 ## Raw stream → DSS extraction (SOLVED, 2026-11-21)
 
