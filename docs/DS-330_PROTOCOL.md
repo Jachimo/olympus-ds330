@@ -203,28 +203,34 @@ is too small for a real recording; likely metadata size). Hypotheses:
 - `47 01 02` (3-byte form) → also responds with zeros (same as 47 01).
 
 ### 0x47 02 discovery analysis
-The string "DICTATE" is significant: it matches the Olympus dictation
-software's "Dictation Module" terminology. This is likely a folder name
-or device mode identifier. The 4 leading zero bytes before "DICTATE" are
-likely a size/type field.
+CORRECTED (2026-11-22): the string "DICTATE" is NOT intrinsically
+significant — it is just a folder label the user of this particular
+device set at some point (folder names are user-settable; see below).
+Any resemblance to the dictation software's "Dictation Module"
+terminology is coincidental. The labels matter to the user's own
+organization, not to the software. The 4 leading zero bytes are a
+count/index field.
 
-### 0x47 — folder names discovered (2026-11-20 continued)
-- `47 02` → `00 00 00 00 "DICTATE" 00...` — folder 1 name
-- `47 03` → `00 00 00 00 "LECTURE " 00...` — folder 2 name
-- `47 04` → `00 00 00 00 "TO DO   " 00...` — folder 3 name
-- `47 05` → `00 00 00 00 "RANDOM  " 00...` — folder 4 name
-- `47 01` → 41 zeros (folder 0? or GetFileNum return=0)
-- Format: 4 zero bytes (likely count/index) + 8-byte ASCII name + zero pad
+### 0x47 — folder names discovered (2026-11-20 continued; numbering corrected 2026-11-22)
+- `47 02` → `00 00 00 00 "DICTATE" 00...` — folder B's name
+- `47 03` → `00 00 00 00 "LECTURE " 00...` — folder C's name
+- `47 04` → `00 00 00 00 "TO DO   " 00...` — folder D's name
+- `47 05` → `00 00 00 00 "RANDOM  " 00...` — folder E's name
+- `47 01` → 41 bytes: dword 1 + zeros (folder A's scan entry; A exposes
+  no readable name — see §9.7)
+- Format: 4 zero bytes (count/index) + 8-byte ASCII name + zero pad
 - This maps to DSXGetFolderName/SetFolderName in the DSX API.
 - The recorder's folder names are USER-SETTABLE per device (the
   Windows software can rename them); DICTATE/LECTURE/TO DO/RANDOM are
   this device's values, not constants. Always read names via
   `47 02..05`; never hardcode name->folder mappings in tooling.
-- `47 06` and higher: untested, could return more folders or file counts.
+- `47 06` and higher: rejected (only 5 folders, A–E).
 
-### Updated 0x47 mapping
-- `47 01` = GetFileNum (file count in current folder = 0? or folder 0)
-- `47 NN` = GetFolderName(NN-2) → returns folder name for index NN-2
+### Updated 0x47 mapping (superseded by §3 and §9.7)
+- `47 01` = GetFileNum-like counter (dword 1 even with 0 or 3 files;
+  semantics unclear) + folder A's scan entry
+- `47 NN` = GetFolderName for folder NN (folders 2–5 = B–E named;
+  folder 1 = A returns the counter)
 
 ### File data hypothesis update
 File data is likely accessed via a sequence: select folder (0x47 XX),
@@ -232,12 +238,16 @@ then select file (0x40 arg?), then read data pages. Or via dedicated
 OpenFile/ReadFile commands in the 0x48+ range.
 
 ### 0x47 folder name mapping (2026-11-20)
-- 0x47 02 = DICTATE, 0x47 03 = LECTURE, 0x47 04 = TO DO, 0x47 05 = RANDOM
+- 0x47 02..05 = this device's folder names for folders B–E; user-set
+  values, not constants (this device: B=DICTATE, C=LECTURE, D=TO DO,
+  E=RANDOM).
 - 0x47 06+ rejected. 0x47 01 = 41 zero bytes.
 - Folder selection via 0x47 does NOT change 0x40 stream content.
 - 0x48/0x49/0x4a all rejected. 0x47 01 02 = same as 0x47 01 (3-byte ignored).
-- The 0x40 stream always returns the same 17-page info object regardless
-  of folder selection. File data must use a completely different path.
+- SUPERSEDED (2026-11-22): the 0x40 stream IS folder-scoped (`40 NN` =
+  first file of folder NN) — the 2026-11-20 probes only ever saw the
+  folder-A object because `40 01` was the only form tried. File data
+  itself uses the `18 <folder> <file>` / `80 00` path (§9.4).
 
 ### Arg-0x00 scan results (2026-11-20, second full sweep)
 Full 2-byte scan with arg=0x00, reset between each probe:
@@ -255,12 +265,15 @@ Full 2-byte scan with arg=0x00, reset between each probe:
 - 0xd1 00 → `00 c0 d0 00 00...` (same as before)
 - ALL OTHER COMMANDS (0x00-0xff): no response (timeout)
 
-### Updated conclusions
+### Updated conclusions (superseded by the §9 capture analysis)
 - The device has a small number of info/status commands (0x47, 0x78, 0x79,
-  0x95, 0xb2, 0xb3, 0xc0, 0xd1) and ONE data-stream command (0x40).
-- The 0x40 stream returns 17 pages = the file info table. This object
-  contains ONLY metadata (file name, date, folder, size dword). The actual
-  .dss recording bytes are NOT accessible via any tested 2-byte command.
+  0x95, 0xb2, 0xb3, 0xc0, 0xd1) and a folder-scoped info stream (0x40/0x41).
+- The 0x40 stream returns 17 pages = one file's metadata (name, date,
+  folder, size dword). The actual .dss recording bytes are NOT accessible
+  via any tested 2-byte command.
+- SOLVED LATER (2026-11-21/22): file data uses the 3-byte
+  `18 <folder> <file>` open + `80 00` data phase (§9.4); the file table
+  is `40 NN`/`41 NN` first/next (§9.3). The hypotheses below are obsolete.
 - The file data likely lives in flash sectors that require either:
   1. A 3+ byte command to address the sector (untested)
   2. A different interface/endpoint
