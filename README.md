@@ -74,13 +74,28 @@ Downloads are written as `<name>.dss` (override with `--out FILE`);
 
 | Path | What |
 |---|---|
-| `src/ds330tool.py` | The tool |
+| `src/ds330tool.py` | The tool (transport / declarative protocol / executor layers) |
+| `tests/` | Pytest suite, built on fixtures captured from a live device |
 | `docs/DS-330_PROTOCOL.md` | Wire-protocol reference |
 | `docs/CURRENT_STATE.md` | Live project state, open questions |
 | `docs/DS-330_NOTES.md` | Background survey and project log |
 | `src/*.c`, `src/*.py` (other) | Probe/dump tools used during reverse-engineering; kept for reference |
 | `data/dsstimescript` | Third-party GPLv2 DSS filename helper (Alexey Fisher, 2006) |
 | `udev/` | udev rule for device access |
+
+## Development
+
+Run the test suite (no hardware needed — the USB layer is exercised via a
+scripted fake):
+
+```sh
+python3 -m pytest tests/
+```
+
+The `tests/data/` fixtures were captured from a real DS-330 (raw download
+stream, file-info object, reference DSS). When changing the stream parser,
+`test_extract_dss_real_stream_roundtrip` will catch regressions against
+the captured data.
 
 ## License
 

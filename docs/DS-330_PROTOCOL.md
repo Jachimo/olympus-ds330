@@ -62,23 +62,39 @@ Format: `cmd [arg]` → response. Verified with device reset between probes.
   verified).
 - Contents of the 17-page object (one file on device, "<RECORDING-NAME>"):
   - page 0: file header: `"<RECORDING-NAME>"` (name), `02 64 73 73 01 00 01 00 02 00
-    00 00` (dss magic), `"JSMYTHE"` (label), date string `02010100010502010`
-  - page 1: date continuation `1002412002306` + `ff07`
+    00 00` (dss magic), `"<USER-LABEL>"` (label), date digits from offset
+    0x2F: `020101000105020101002412002306` (30 ASCII digits; see §3.1)
+  - page 1: date continuation + `ff 07 ff` padding
   - pages 2–7: FF fill (erased slots)
   - page 8: dword `90 27 15 00` (LE 0x00152790 = 1,384,080) — size or region
   - pages 9–16: zeros/FF
 - This object is the same data that command `00` primes (older C-based dump
   read 32 pages via `00`; the file header was at page 15 of that dump).
 
+### 3.1 File-info date digits (SOLVED 2026-11-22)
+Object offsets 0x2F–0x4C hold 30 ASCII digits (an earlier read started at
+0x30 and silently dropped the first digit):
+
+    digits[0:12]   record start, YYMMDDHHMMSS
+    digits[12:24]  record stop,  YYMMDDHHMMSS
+    digits[24:30]  duration,      HHMMSS
+
+On the reference recording: start 2002-01-01 00:01:05, stop 2002-01-01
+00:24:12, duration 00:23:06. stop − start tracks the duration (the
+duration field runs one second short). A recorder with an unset clock
+stamps files with its power-on default (observed: 2002-01-01).
+Decoder: `decode_date_digits()` in src/ds330tool.py (unit-tested against
+the live capture in tests/data/fileinfo.bin).
+
 ### 0x47 — status/counter (CONFIRMED)
 - `47 01` and `47 00000000` → ~41 bytes of zeros. Possibly GetFileNum or
   OpenFile. Does NOT redirect the 0x40 stream to file data (tested).
 
 ### 0x95 — device label (CONFIRMED)
-- `95 01` → `"JSMYTHE"` (16 bytes, zero-padded). The recorder's user label.
+- `95 01` → `"<USER-LABEL>"` (16 bytes, zero-padded). The recorder's user label.
 
 ### 0xb2 — device identity (CONFIRMED)
-- `b2 01` → `"DS-330    JSMYTHE"` (model name + user label, zero-padded).
+- `b2 01` → `"DS-330    <USER-LABEL>"` (model name + user label, zero-padded).
 
 ### 0xb3 — single value (CONFIRMED)
 - `b3 01` → `10 00 00 ...` (16 bytes). Unknown (maybe max file count or
@@ -343,6 +359,13 @@ e.g. captured frame `90 32 36 31 31 32 32 30 32 31 32 31 37` =
 ### 9.7 Session management notes (live-tested)
 - The device rejects `18 01 01` (file open) unless the §9.1+§9.2
   init/warmup ran first in the same session.
+- **Query order matters (2026-11-22):** the device stops answering
+  `40 01` after a `95 00` (label) or `79 00` (memory) query in the same
+  session — always query file info first. The v1.0 `info()` does.
+- **Wedge behavior (2026-11-22):** a stale session produces transfer
+  failures (bulk OUT timeout, interrupt status timeouts); a device reset
+  plus retry fixes it. A wedged device can take >2 s to answer a frame
+  (observed up to ~5 s) — use a generous timeout (the v1.0 tool uses 8 s).
 - `libusb_reset_device()` + fresh open fully recovers any wedged state.
 - `set_configuration(1)` returns BUSY (-6); ignore.
 
