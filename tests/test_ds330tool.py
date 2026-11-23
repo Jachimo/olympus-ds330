@@ -188,11 +188,11 @@ def test_run_sequence_full_download():
     ]
     fake = FakeUsb(script)
     dev = t.DS330(usb=fake)
-    r = dev.run_sequence(t.download_sequence(), file_index=1)
+    r = dev.run_sequence(t.download_sequence(), folder=1, file_index=1)
     # every frame went out as a zero-padded 64-byte page
     assert all(len(s) == 64 for s in fake.sent)
     assert fake.sent[0][:2] == b"\xf0\x00"
-    # the file selector byte was injected (frame #10 in the sequence)
+    # the folder and file selector bytes were injected (frame #10)
     assert fake.sent[9] == b"\x18\x01\x01" + b"\x00" * 61
     assert fake.sent[10][:2] == b"\x80\x00"
     # file-info parsed from the scripted pages
@@ -211,8 +211,8 @@ def test_run_sequence_rejection():
 def test_run_sequence_open_file_selector_bytes():
     fake = FakeUsb([(ACCEPT, [b"\x00" * 64])] * 11)
     dev = t.DS330(usb=fake)
-    dev.run_sequence(t.download_sequence(), file_index=3)
-    assert fake.sent[9][:3] == b"\x18\x01\x03"
+    dev.run_sequence(t.download_sequence(), folder=5, file_index=3)
+    assert fake.sent[9][:3] == b"\x18\x05\x03"
 
 
 def test_run_sequence_rejects_unknown_status():
@@ -317,15 +317,6 @@ def test_main_settime_utc_with_explicit_time(monkeypatch, capsys):
     assert sent["when"] == datetime.datetime(2026, 11, 22, 12, 0, 0)
 
 
-# ---------------------------------------------------------------------------
-# usb-level error mapping
-# ---------------------------------------------------------------------------
-
-def test_usb_error_hierarchy():
-    assert issubclass(t.UsbError, t.DS330Error)
-    assert issubclass(t.ProtocolRejected, t.DS330Error)
-
-
 def test_descriptor_layout():
     # USB device descriptor: 18 packed bytes; unpack must round-trip VID/PID
     desc = bytes([18, 1]) + struct.pack("<H", 0x0110) + bytes([9, 0, 0, 8]) \
@@ -336,3 +327,26 @@ def test_descriptor_layout():
     assert parsed["idVendor"] == t.VID
     assert parsed["idProduct"] == t.PID
     assert parsed["bLength"] == 18
+
+# ---------------------------------------------------------------------------
+# usb-level error mapping / folder resolution
+# ---------------------------------------------------------------------------
+
+def test_usb_error_hierarchy():
+    assert issubclass(t.UsbError, t.DS330Error)
+    assert issubclass(t.ProtocolRejected, t.DS330Error)
+
+
+@pytest.mark.parametrize("spec,expected", [
+    ("1", 1), ("5", 5), ("a", 1), ("E", 5), ("A", 1),
+    ("random", 5), ("RANDOM", 5), ("dictate", 2), ("lecture", 3),
+    ("to do", 4), ("todo", 4), ("TODO", 4),
+])
+def test_resolve_folder(spec, expected):
+    assert t.resolve_folder(spec) == expected
+
+
+@pytest.mark.parametrize("bad", ["0", "6", "f", "music", "", "a1"])
+def test_resolve_folder_rejects(bad):
+    with pytest.raises(t.DS330Error):
+        t.resolve_folder(bad)

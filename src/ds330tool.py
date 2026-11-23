@@ -315,7 +315,8 @@ class Frame:
     pages   bulk-IN pages to read for the data stage (0 = none).
     name    handle for results/errors; defaults to the wire bytes.
     suffix  optional callable producing dynamic trailing byte(s)
-            (e.g. the file selector in `18 01 NN`), appended to `bytes`.
+            (e.g. the folder/file selector in `18 <folder> <file>`),
+            appended to `bytes`.
     """
 
     bytes: bytes
@@ -355,9 +356,12 @@ FOLDER_SCAN = [Frame(b"\x47\x01", pages=1, name="file-count")] + [
 FILE_INFO = Frame(b"\x40\x01", pages=17, name="file-info")
 FILE_INFO_FLUSH = Frame(b"\x41\x01", name="file-info-flush")
 
-# §9.4 download: `18 01 NN` (third byte = 1-based file selector), `80 00`
-OPEN_FILE = Frame(b"\x18\x01", pages=1, name="open-file",
-                  suffix=lambda p: bytes([p["file_index"]]))
+# §9.4 download: `18 <folder> <file>` — second byte is the folder
+# (1–5 = device folders A–E; A is unnamed, B–E are named DICTATE/
+# LECTURE/TO DO/RANDOM per the 47 02..05 queries), third byte is the
+# 1-based file within it — then `80 00` starts the data phase.
+OPEN_FILE = Frame(b"\x18", pages=1, name="open-file",
+                  suffix=lambda p: bytes([p["folder"], p["file_index"]]))
 DATA_PHASE = Frame(b"\x80\x00", name="data-phase")
 STREAM = StreamPhase()
 
@@ -510,10 +514,15 @@ class DS330:
             return a if a == b else None
         return ascii_stripped(data) or None
 
-    def download_raw(self, file_index=1, progress=None):
-        """§9.4 session. Returns (file_info dict or None, stream bytes)."""
+    def download_raw(self, folder=1, file_index=1, progress=None):
+        """§9.4 session: open `18 <folder> <file>` and stream it.
+
+        `folder` is 1–5 (device folders A–E; folder 5 is RANDOM), and
+        `file_index` is the 1-based file within that folder. An empty
+        stream means the folder/file does not exist.
+        """
         r = self.run_sequence(download_sequence(), progress=progress,
-                              file_index=file_index)
+                              folder=folder, file_index=file_index)
         fi = parse_file_info(r.get(FILE_INFO.key())) or None
         return fi, r.get(STREAM.name, b"")
 
@@ -664,17 +673,35 @@ def cmd_info(dev, args):
         print(f"dates  : {fi['date_digits']!r} (unparsed)")
 
 
+FOLDER_NAMES = {"a": 1, "b": 2, "c": 3, "d": 4, "e": 5,
+                "dictate": 2, "lecture": 3, "to do": 4, "todo": 4,
+                "random": 5}
+
+
+def resolve_folder(spec: str) -> int:
+    """Folder spec -> 1-5. Accepts a number, a letter A-E, or a folder
+    name (DICTATE/LECTURE/TO DO/RANDOM) as shown by `info`."""
+    s = str(spec).strip().lower()
+    if s in FOLDER_NAMES:
+        return FOLDER_NAMES[s]
+    if s.isdigit() and 1 <= int(s) <= 5:
+        return int(s)
+    raise DS330Error(f"bad folder {spec!r}: use 1-5, A-E, or a folder name "
+                    "(DICTATE/LECTURE/TO DO/RANDOM)")
+
+
 def cmd_download(dev, args):
     def progress(total, dt):
         print(f"  {total:8d} bytes ({dt:5.1f}s)", file=sys.stderr)
     print("downloading raw stream ...", file=sys.stderr)
     fi, stream = dev.download_raw(
+        folder=resolve_folder(args.folder),
         file_index=args.index,
         progress=progress if args.verbose else None)
     print(f"raw stream: {len(stream)} bytes", file=sys.stderr)
     if not stream:
         raise ProtocolRejected("device returned no data -- "
-                               "no recording at this index?")
+                               "no recording in that folder at that index?")
     dss = extract_dss(stream)
     name = (fi or {}).get("name") or "recording"
     out = os.path.expanduser(args.out or f"{name.lower()}.dss")
@@ -706,8 +733,11 @@ def main(argv=None):
     sub.add_parser("info", help="show device identity, folders, file table")
 
     d = sub.add_parser("download", help="download a .dss recording")
+    d.add_argument("--folder", "-f", metavar="FOLDER", default="1",
+                   help="device folder to read from: 1-5, A-E, or name "
+                        "(DICTATE/LECTURE/TO DO/RANDOM). Default: 1 (A)")
     d.add_argument("--index", "-i", metavar="N", type=int, default=1,
-                   help="file number to download, 1-based (default: 1)")
+                   help="file number within the folder, 1-based (default: 1)")
     d.add_argument("--out", metavar="FILE",
                    help="output .dss path (default: <name>.dss)")
     d.add_argument("--raw", metavar="FILE", help="also save the raw stream")

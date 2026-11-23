@@ -328,11 +328,19 @@ between info and open.
 ### 9.4 File download (the money sequence)
 | Frame | Notes |
 |-------|-------|
-| `18 01 01` | OpenFile — **third byte is the file selector (01 = file #1)**. Response page `00 96 24 00 ...` |
+| `18 01 01` | OpenFile — **`18 <folder> <file>`**: second byte is the folder (01–05 = device folders A–E), third byte is the 1-based file within it. Response page `00 96 24 00 ...` |
 | `80 00` | Data phase start. Then bulk-in pages stream until timeout. |
 
-`18 01 01` — NOT `18 01 00`: the third byte is required; sending `18 01`
-(two bytes) is rejected.
+`18 01 01` — NOT `18 01 00`: both selector bytes are required; sending
+`18 01` (two bytes) is rejected.
+
+Folder model (established live, 2026-11-22): folders 1–5 = A–E.
+`47 02..05` return the names of folders B–E (DICTATE/LECTURE/TO DO/
+RANDOM); `47 01` is folder A's query (status/zeros — A is unnamed).
+An `18 <folder> <file>` pointing at a nonexistent file yields an empty
+data stream (no error). Verified with recordings in A and E:
+`18 05 01`/`18 05 02` download both RANDOM-folder files, `18 02 01`
+(LECTURE, empty folder) returns an empty stream.
 
 ### 9.5 Data-phase stream layout (verified byte-for-byte)
 The `80 00` data stream is NOT the same layout as the old probe-era

@@ -36,8 +36,9 @@ All details in `docs/DS-330_PROTOCOL.md` §9. Summary:
 - Connect: `f0 00` (init), `b2 00` (confirm)
 - Warmup folder scan (REQUIRED before file ops): `47 01` .. `47 05`
 - File info: `40 01` → 17-page object; `41 01` (no data)
-- **Download: `18 01 01`** (open file #1 — third byte is the file selector,
-  NOT optional) **→ `80 00`** (data phase) → bulk-in pages until timeout
+- **Download: `18 <folder> <file>`** (folder 1–5 = A–E, third byte is the
+  1-based file within it; resolved issue #2's single-folder limitation)
+  **→ `80 00`** (data phase) → bulk-in pages until timeout
 - Data-phase stream layout: 2-byte preamble, then repeating
   [512 B dss + 64 B frame] every 576 B; fixup dss[792]=0xFE
 - File-info date digits: 30 ASCII digits at object offset 0x2F —
@@ -64,7 +65,7 @@ All details in `docs/DS-330_PROTOCOL.md` §9. Summary:
 
 - 2-byte command space swept twice; only 0x40/0x41/0x47/0x78/0x79/0x95/
   0xb2/0xb3/0xc0/0xd1/0xf0 respond (see protocol doc §3-4 for details).
-- `18 01` (two bytes, no file selector) is REJECTED — the selector byte is
+- `18 01` (two bytes, no selectors) is REJECTED — both selector bytes are
   required (`18 01 01`).
 - `0x93 <mode> <count>` frames: DSXUSB.SYS-era hypothesis; superseded by
   the captured `18 01 01`/`80 00` sequence. Do not pursue.
@@ -84,9 +85,13 @@ All details in `docs/DS-330_PROTOCOL.md` §9. Summary:
 
 ## Remaining open questions (nice-to-have, not blockers)
 
-1. **Multiple files**: `download --index N` sends `18 01 NN` with the
-   file-selector byte; still untested with >1 recording on device
-   (only one recording available; record two files to verify).
+1. **Multiple files: SOLVED (2026-11-22).** The open-file frame is
+   `18 <folder> <file>` — folders 1–5 = device A–E, both selector bytes
+   required. `download --folder F -i N` reads any folder (number,
+   letter, or name). Verified live with recordings in folders A and E
+   (RANDOM): all download and decode via ffmpeg. The `40 01` file-info
+   object still reflects only one file; per-file info beyond that object
+   is unknown.
 2. **`--wav` conversion** shells out to ffmpeg; DSS-SP decode otherwise
    unsupported natively.
 3. **`47 01` semantics** (file-count dword) and `79 00` (memory) encoding

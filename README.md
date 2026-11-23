@@ -48,8 +48,8 @@ Corrections and further technical information are always appreciated.
 
 ```sh
 python3 src/ds330tool.py info                  # device, folders, file table
-python3 src/ds330tool.py download              # download first recording
-python3 src/ds330tool.py download -i 2 --wav   # second recording, convert
+python3 src/ds330tool.py download              # first recording, folder A
+python3 src/ds330tool.py download -f E -i 2 --wav  # RANDOM folder, file 2, convert
 python3 src/ds330tool.py settime               # sync recorder clock to PC
 python3 src/ds330tool.py reset                 # recover wedged device
 ```

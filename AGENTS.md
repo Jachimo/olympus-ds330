@@ -53,7 +53,9 @@ protocol is proprietary and was fully reverse-engineered (see docs/).
 
 ## Open questions (from CURRENT_STATE.md)
 
-- Multi-file download: `18 01 NN` selector untested with >1 recording.
+- Multi-file download: `18 <folder> <file>` verified with files in two
+  folders. The `40 01` file-info object only describes one file per
+  session; whether it can report other folders' files is unknown.
 - `47 01` (file-count) and `79 00` (memory) encodings not fully understood.
 - IOCTL→wire mapping of DSXUSB.DLL/SYS (0x98ff2004–0x98ff20a4) — internal
   branch only; the driver no longer needs it.
