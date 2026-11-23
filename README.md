@@ -18,7 +18,7 @@ Corrections and further technical information are always appreciated.
 - `download` — download recordings as `.dss` (byte-identical to what the
   Windows player produces), optionally converting to `.wav` via ffmpeg.
   With no options it downloads every recording from every folder, naming
-  files by folder and record-start timestamp (`E01_20261123-005622.dss`)
+  files by folder and record-start timestamp (`E01_20261123T005622.dss`)
   and preserving the record time in the file's mtime. Folder names are
   read live from the recorder (they are user-settable, per device)
 - `settime` — set the recorder's clock from the computer clock

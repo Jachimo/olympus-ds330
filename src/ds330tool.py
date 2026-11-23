@@ -742,12 +742,12 @@ def parse_dss_header(dss: bytes) -> Optional[dict]:
 
 
 def recording_name(dss: bytes, fallback: str) -> str:
-    """Base name for a downloaded recording: <YYYYMMDD-HHMMSS> from the
-    DSS header (folder/timestamp naming), or the fallback if the header
-    does not parse."""
+    """Base name for a downloaded recording: <YYYYMMDDTHHMMSS> (ISO 8601
+    date/time separator) from the DSS header (folder/timestamp naming),
+    or the fallback if the header does not parse."""
     header = parse_dss_header(dss)
     if header:
-        return header["start"].strftime("%Y%m%d-%H%M%S")
+        return header["start"].strftime("%Y%m%dT%H%M%S")
     return fallback
 
 
@@ -802,7 +802,7 @@ def cmd_download_all(dev, args):
     probing `18 <folder> <file>`: an empty data stream cleanly signals
     the end of a folder's file list (established live). Output files are
     named <letter><NN>_<YYYYMMDD-HHMMSS>.dss from the DSS header's
-    record-start timestamp, e.g. E01_20261123-005622.dss.
+    record-start timestamp, e.g. E01_20261123T005622.dss.
     """
     total = 0
     for folder in range(1, 6):
@@ -873,8 +873,10 @@ def main(argv=None):
                    help="convert to .wav via ffmpeg")
 
     s = sub.add_parser("settime", help="set recorder clock from the computer clock")
-    s.add_argument("--time", metavar="YYYYMMDDHHMMSS",
-                   help="specific time instead of now (interpreted as UTC with --utc, local otherwise)")
+    s.add_argument("--time", metavar="YYYYMMDDTHHMMSS",
+                   help="specific time instead of now; a literal T between "
+                        "date and time is accepted (and preferred) "
+                        "(interpreted as UTC with --utc, local otherwise)")
     s.add_argument("--utc", action="store_true",
                    help="set the clock to UTC instead of the local "
                         "timezone (with --time: interpret the digits as UTC)")
@@ -885,7 +887,11 @@ def main(argv=None):
     when = None
     if args.command == "settime":
         if args.time:
-            when = datetime.datetime.strptime(args.time, "%Y%m%d%H%M%S")
+            # a literal 'T' between date and time is accepted and
+            # preferred everywhere we write timestamps; bare digits work
+            when = datetime.datetime.strptime(
+                args.time, "%Y%m%dT%H%M%S" if "T" in args.time.upper()
+                else "%Y%m%d%H%M%S")
         elif args.utc:
             when = datetime.datetime.now(datetime.timezone.utc).replace(tzinfo=None)
 

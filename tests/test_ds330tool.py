@@ -388,7 +388,7 @@ def test_resolve_folder_rejects(bad):
 def test_recording_name_from_header():
     dss = bytearray(b"\x00" * 1024)
     dss[38:50] = b"261123005622"
-    assert t.recording_name(bytes(dss), "fallback") == "20261123-005622"
+    assert t.recording_name(bytes(dss), "fallback") == "20261123T005622"
 
 
 def test_recording_name_fallback_on_garbage():
@@ -424,8 +424,8 @@ def test_cmd_download_all_sweeps_folders(tmp_path, monkeypatch, capsys):
     t.cmd_download_all(FakeDev(), args)
     out = capsys.readouterr().out
     assert "downloaded 3 recording(s)" in out
-    for name in ("A01_20261123-005622.dss", "E01_20261123-011225.dss",
-                 "E02_20261122-093000.dss"):
+    for name in ("A01_20261123T005622.dss", "E01_20261123T011225.dss",
+                 "E02_20261122T093000.dss"):
         assert (tmp_path / name).exists(), name
 
 
