@@ -56,6 +56,11 @@ protocol is proprietary and was fully reverse-engineered (see docs/).
 - Multi-file download: `18 <folder> <file>` verified with files in two
   folders. The full file table is enumerable via `40 NN` (first) /
   `41 NN` (next, empty = exhausted) per folder.
-- `47 01` (file-count) and `79 00` (memory) encodings not fully understood.
+- `47 01` carries folder A's name (same format as 47 02..05); it reads
+  as a bare counter only while A is unnamed. `79 00` (memory) encoding
+  not fully understood.
+- Folder rename is `4A <folder> <8-byte name>` (§9.8 of the protocol
+  doc); file delete is decoded as `A0 <folder> <file WORD x2>` but not
+  yet live-verified.
 - IOCTL→wire mapping of DSXUSB.DLL/SYS (0x98ff2004–0x98ff20a4) — internal
   branch only; the driver no longer needs it.

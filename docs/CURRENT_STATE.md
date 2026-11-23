@@ -99,12 +99,19 @@ All details in `docs/DS-330_PROTOCOL.md` §9. Summary:
    info per folder; `info` lists every recording with names and dates
    (live-verified with 3 files across folders A and E). The DSS header
    also carries per-file timestamps, used for naming and file mtimes.
-2. **Folder renaming** (the Windows software can set folder names) is
-   NOT yet decoded — a future feature.
-3. **`--wav` conversion** shells out to ffmpeg; DSS-SP decode otherwise
+2. **Folder renaming: SOLVED (2026-11-23).** `4A <folder> <8-byte
+   name>` (decoded from the DSXUSB.SYS disassembly, live-verified).
+   `rename -f F --name NAME` renames any folder including A; writing
+   eight spaces clears a name. Also discovered: `47 01` carries folder
+   A's name in the same format as `47 02..05` — it only looked like a
+   status counter while A was unnamed.
+3. **File deletion** frame decoded (`A0 <folder> <file WORD x2>`) from
+   the same disassembly; live verification pending a disposable
+   recording (issue #4).
+4. **`--wav` conversion** shells out to ffmpeg; DSS-SP decode otherwise
    unsupported natively.
-3. **`47 01` semantics** (file-count dword) and `79 00` (memory) encoding
-   are not fully understood; harmless to leave raw.
+5. **`79 00` (memory) encoding** is not fully understood; harmless to
+   leave raw.
 
 ## Session log
 
@@ -127,3 +134,11 @@ All details in `docs/DS-330_PROTOCOL.md` §9. Summary:
   auto reset+retry for wedges; 8 s device timeout. Live download
   verified byte-identical to the captured reference (sanitized label
   aside).
+
+- 2026-11-23: Issue #3 (folder rename) solved on branch
+  feature/rename-folders. Spike on the private branch decoded wire
+  frames from the DSXUSB.SYS dispatch handlers: `4A <folder> <name>`
+  (rename), `A0 <folder> <file WORD x2>` (delete), `E1` (folder info
+  write), `C0 <folder> <file>` (direct file addressing); the driver's
+  length field explains the 64-byte pages. Rename live-verified on
+  folders A/B/E incl. round-trips and clearing A's name.
