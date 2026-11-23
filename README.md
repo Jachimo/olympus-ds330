@@ -1,8 +1,8 @@
 # ds330tool — Olympus DS-330 on Linux
 
 `ds330tool` is a command-line tool for working with the Olympus DS-330 
-digital voice recorder (c. 2002) over USB. It allows downloading and clock
-sync.
+digital voice recorder (c. 2002) over USB.
+Currently, it supports downloading recordings and recorder clock sync.
 
 ![Olympus DS-330 digital voice recorder](docs/ds-330_frontview.jpg)
 
